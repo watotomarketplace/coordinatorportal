@@ -28,3 +28,4 @@ import{j as e}from"./vendor-BzMkH_x1.js";function s(){return e.jsxs("div",{class
                 input:checked + .toggle-slider { background-color: var(--accent-color); }
                 input:checked + .toggle-slider:before { transform: translateX(18px); }
             `})]})}export{s as default};
+//# sourceMappingURL=NotificationsSettings-Cgu5BcaD.js.map

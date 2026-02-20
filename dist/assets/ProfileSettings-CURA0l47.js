@@ -48,3 +48,4 @@ import{a as s,j as e}from"./vendor-BzMkH_x1.js";import{u as f,P as u}from"./inde
                 }
                 .btn-primary:active { opacity: 0.8; transform: scale(0.98); }
             `})]})}export{v as default};
+//# sourceMappingURL=ProfileSettings-CURA0l47.js.map

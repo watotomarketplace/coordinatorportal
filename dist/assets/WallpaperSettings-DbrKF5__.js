@@ -5,3 +5,4 @@ import{j as a}from"./vendor-BzMkH_x1.js";import{a as i,W as r}from"./index-CBJe6
                     gap: 16px;
                 }
             `})]})}export{n as default};
+//# sourceMappingURL=WallpaperSettings-DbrKF5__.js.map

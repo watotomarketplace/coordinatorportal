@@ -3,7 +3,7 @@ import initSqlJs from 'sql.js'
 import bcrypt from 'bcryptjs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -19,6 +19,20 @@ export function getDatabase() {
 }
 
 export async function initDatabase() {
+  // CRITICAL: Force purge the local Thinkific cache file on boot.
+  // This breaks the incremental sync loop where corrupted Promise objects 
+  // (caused by previous async codemods) were continually copied over to the new cache,
+  // ultimately crashing the React frontend with Error #31.
+  try {
+    const cachePath = join(__dirname, 'cache.json')
+    if (existsSync(cachePath)) {
+      unlinkSync(cachePath)
+      console.log('🧹 Purged thinkific cache.json to clear any corrupted data')
+    }
+  } catch (err) {
+    console.error('⚠️ Failed to purge cache.json:', err.message)
+  }
+
   if (IS_POSTGRES) {
     console.log('🔗 Connecting to PostgreSQL...')
     pgPool = new Pool({

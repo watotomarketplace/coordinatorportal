@@ -17,7 +17,7 @@ const CHECKPOINT_RANGES = {
 /**
  * Calculate attendance trend from a series of reports
  */
-async function calcAttendanceTrend(reports) {
+function calcAttendanceTrend(reports) {
     if (reports.length === 0) return 'No data'
     const counts = reports.filter(r => r.attendance_count != null).map(r => r.attendance_count)
     if (counts.length < 2) return counts.length === 1 ? `Steady at ${counts[0]}` : 'No data'
@@ -36,7 +36,7 @@ async function calcAttendanceTrend(reports) {
 /**
  * Calculate engagement trend from reports
  */
-async function calcEngagementTrend(reports) {
+function calcEngagementTrend(reports) {
     const levels = reports.filter(r => r.engagement_level).map(r => r.engagement_level)
     if (levels.length === 0) return 'No data'
 
@@ -53,7 +53,7 @@ async function calcEngagementTrend(reports) {
 /**
  * Extract recurring themes from reports
  */
-async function extractRecurringThemes(reports) {
+function extractRecurringThemes(reports) {
     const themes = reports
         .filter(r => r.key_themes)
         .map(r => r.key_themes)
@@ -64,7 +64,7 @@ async function extractRecurringThemes(reports) {
 /**
  * Aggregate formation evidence
  */
-async function aggregateFormationEvidence(reports) {
+function aggregateFormationEvidence(reports) {
     const evidence = reports
         .filter(r => r.formation_evidence)
         .map(r => `Week ${r.week_number}: ${r.formation_evidence}`)
@@ -75,7 +75,7 @@ async function aggregateFormationEvidence(reports) {
 /**
  * Aggregate pastoral concerns
  */
-async function aggregateConcerns(reports) {
+function aggregateConcerns(reports) {
     const concerns = reports
         .filter(r => r.pastoral_concerns)
         .map(r => `Week ${r.week_number}: ${r.pastoral_concerns}`)

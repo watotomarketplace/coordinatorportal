@@ -38,6 +38,14 @@ export async function initDatabase() {
     await runMigrations()
     saveDatabase()
   }
+
+  // Purge any checkpoints corrupted by the earlier Promise serialization bug
+  try {
+    await dbRun("DELETE FROM discernment_checkpoints WHERE attendance_trend LIKE '%Promise%' OR summary LIKE '%Promise%' OR attendance_trend = '{}'")
+    console.log('🧹 Purged corrupted checkpoints if any existed')
+  } catch (e) {
+    console.error('Failed to purge checkpoints:', e.message)
+  }
 }
 
 // Abstracted migrations that modify schema syntax based on current dialect

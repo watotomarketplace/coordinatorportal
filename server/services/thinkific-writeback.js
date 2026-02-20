@@ -69,7 +69,10 @@ export async function updateUserName(thinkificUserId, nameData, actor) {
             previous: { first_name: currentUser.first_name, last_name: currentUser.last_name }
         }
     } catch (error) {
-        const errMsg = error.response?.data?.message || error.message
+        let errMsg = error.response?.data?.message || error.message
+        if (typeof errMsg === 'object') {
+            errMsg = JSON.stringify(errMsg)
+        }
 
         // Log failed attempt too
         await dbRun(`
@@ -148,7 +151,10 @@ export async function resetUserPassword(thinkificUserId, actor) {
             studentName: `${currentUser.first_name} ${currentUser.last_name}`
         }
     } catch (error) {
-        const errMsg = error.response?.data?.message || error.message
+        let errMsg = error.response?.data?.message || error.message
+        if (typeof errMsg === 'object') {
+            errMsg = JSON.stringify(errMsg)
+        }
 
         await dbRun(`
             INSERT INTO audit_logs (user_id, user_name, role, action, target_type, target_id, details, created_at)
@@ -174,7 +180,7 @@ export async function resetUserPassword(thinkificUserId, actor) {
 /**
  * Generate a secure temporary password
  */
-async function generateTempPassword() {
+function generateTempPassword() {
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$'
     let password = ''
     for (let i = 0; i < 12; i++) {

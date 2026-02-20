@@ -31,7 +31,7 @@ async function getNotionConfig() {
 }
 
 // --- Map Notion properties to weekly_reports columns ---
-async function mapNotionPageToReport(page) {
+function mapNotionPageToReport(page) {
     const props = page.properties || {}
 
     // Helper to extract property values (supports various Notion property types)
@@ -77,7 +77,7 @@ async function mapNotionPageToReport(page) {
 
 // --- Core Sync Function ---
 export async function syncWeeklyReports() {
-    const config = getNotionConfig()
+    const config = await getNotionConfig()
     if (!config) {
         lastSyncStatus = { lastSyncTime: null, status: 'disabled', message: 'Notion credentials not configured', recordsSynced: 0 }
         return lastSyncStatus
@@ -211,7 +211,7 @@ export async function syncWeeklyReports() {
 
 // --- Auto-sync management ---
 export async function startAutoSync() {
-    const config = getNotionConfig()
+    const config = await getNotionConfig()
     if (!config) {
         console.log('ℹ️ Notion sync disabled — credentials not configured')
         lastSyncStatus = { lastSyncTime: null, status: 'disabled', message: 'Notion credentials not configured', recordsSynced: 0 }
@@ -243,7 +243,7 @@ export async function restartAutoSync() {
 }
 
 export async function getSyncStatus() {
-    const config = getNotionConfig()
+    const config = await getNotionConfig()
     return {
         ...lastSyncStatus,
         configured: !!config,

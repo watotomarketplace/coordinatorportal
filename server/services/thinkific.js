@@ -316,7 +316,7 @@ export async function getPaginatedUsers({ page = 1, limit = 50, type = 'enrolled
     }
 }
 
-async function filterData(data, point) {
+function filterData(data, point) {
     if (!data) return []
     if (point) return data.filter(s => s.celebration_point === point)
     return [...data] // Return copy to prevent mutation
@@ -638,7 +638,7 @@ export async function forceRefresh() {
 // ═══════════════════════════════════════════════════════
 // STATISTICS & CHARTS
 // ═══════════════════════════════════════════════════════
-export async function getStats(students) {
+export function getStats(students) {
     const uniqueStudents = new Set(students.map(s => s.userId || s.name)).size
     const completedCourses = students.filter(s => s.status === 'Completed').length
     const activeCourses = students.filter(s => s.status === 'In Progress').length
@@ -647,7 +647,7 @@ export async function getStats(students) {
     return { totalStudents: uniqueStudents, activeCourses, completedCourses, averageProgress }
 }
 
-export async function getChartData(students) {
+export function getChartData(students) {
     const progressDistribution = [0, 0, 0, 0]
     students.forEach(s => {
         const p = s.progress || 0

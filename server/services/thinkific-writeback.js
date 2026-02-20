@@ -10,7 +10,7 @@
 import axios from 'axios'
 import { dbRun, dbGet } from '../db/init.js'
 
-async function createClient() {
+function createClient() {
     return axios.create({
         baseURL: 'https://api.thinkific.com/api/public/v1',
         headers: {

@@ -69,7 +69,7 @@ const VALID_CELEBRATION_POINTS = [
     'Ntinda', 'Online', 'Suubi'
 ]
 
-async function normalizeCelebrationPoint(rawCompany) {
+function normalizeCelebrationPoint(rawCompany) {
     if (!rawCompany || rawCompany.trim() === '') return 'Unknown'
     const trimmed = rawCompany.trim()
     if (CELEBRATION_POINT_MAPPING[trimmed]) return CELEBRATION_POINT_MAPPING[trimmed]

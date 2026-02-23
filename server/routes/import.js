@@ -96,26 +96,27 @@ queue.register('import', async (data, updateProgress) => {
 
         try {
             if (op.action === 'ENROLL') {
-                const res = await enrollUser(op.userId)
+                const res = await enrollUser(op.userId, op.courseId)
                 result.success = res.success
-                result.message = res.message || 'Enrolled'
+                result.message = res.success ? (res.message || 'Enrolled') : (res.message || 'Enrollment failed')
             }
             else if (op.action === 'UPDATE_AND_ENROLL') {
                 const upd = await updateUser(op.userId, { company: op.celebrationPoint })
                 if (upd.success) {
-                    const res = await enrollUser(op.userId)
+                    const res = await enrollUser(op.userId, op.courseId)
                     result.success = res.success
-                    result.message = res.message || 'Updated & Enrolled'
+                    result.message = res.success ? (res.message || 'Updated & Enrolled') : (res.message || 'Enrollment failed')
                 } else {
-                    result.message = 'Update failed'
+                    result.message = upd.message || 'Update failed'
                 }
             }
             else if (op.action === 'CREATE_AND_ENROLL') {
-                const create = await createUser(op.firstName, op.lastName, op.email, op.celebrationPoint, 'Watoto123!')
+                // Remove hardcoded password, send welcome email instead
+                const create = await createUser(op.firstName, op.lastName, op.email, op.celebrationPoint, null, true)
                 if (create.success) {
-                    const res = await enrollUser(create.user.id)
+                    const res = await enrollUser(create.user.id, op.courseId)
                     result.success = res.success
-                    result.message = res.message || 'Created & Enrolled'
+                    result.message = res.success ? (res.message || 'Created & Enrolled') : (res.message || 'Enrollment failed')
                 } else {
                     result.message = create.message || 'Creation failed'
                 }

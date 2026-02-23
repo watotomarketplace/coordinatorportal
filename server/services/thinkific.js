@@ -689,16 +689,19 @@ export function getChartData(students) {
     return { progressDistribution, completionStatus, courseProgress, engagement }
 }
 
-export async function enrollUser(userId) {
+export async function enrollUser(userId, courseId = 3300782) {
     const client = createClient()
     try {
-        // Course ID for Watoto Leadership 101: 3300782
+        // Default Course ID for Watoto Leadership 101: 3300782
+        // Sanitize incoming courseId (might be a string from CSV. If invalid/empty, fallback to default)
+        const safeCourseId = parseInt(courseId, 10)
+        const finalCourseId = isNaN(safeCourseId) ? 3300782 : safeCourseId
+
+        // The Thinkific API expects a flat payload for enrollments
         const response = await client.post('/enrollments', {
-            enrollment: {
-                user_id: userId,
-                course_id: 3300782,
-                activated_at: new Date().toISOString()
-            }
+            user_id: userId,
+            course_id: finalCourseId,
+            activated_at: new Date().toISOString()
         })
 
         // Invalidate cache to force immediate refresh on next get
@@ -708,11 +711,20 @@ export async function enrollUser(userId) {
         return { success: true, enrollment: response.data }
     } catch (error) {
         console.error('Enrollment failed:', error.response?.data || error.message)
-        return { success: false, message: error.response?.data?.errors?.base?.[0] || 'Enrollment failed' }
+        const thinkificError = error.response?.data
+        let errorMsg = 'Enrollment failed'
+        if (thinkificError) {
+            if (thinkificError.errors?.base?.[0]) errorMsg = thinkificError.errors.base[0]
+            else if (typeof thinkificError === 'object') errorMsg = JSON.stringify(thinkificError)
+            else errorMsg = String(thinkificError)
+        } else if (error.message) {
+            errorMsg = error.message
+        }
+        return { success: false, message: errorMsg }
     }
 }
 
-export async function createUser(firstName, lastName, email, company, password) {
+export async function createUser(firstName, lastName, email, company, password, sendWelcomeEmail = false) {
     const client = createClient()
     try {
         const payload = {
@@ -723,13 +735,8 @@ export async function createUser(firstName, lastName, email, company, password) 
             company: company || "Unknown" // Celebration Point
         }
 
-        // Only add password if provided (Thinkific might send email if not?)
-        // Actually Thinkific requires password for API creation usually or it generates one?
-        // Let's set a default if not provided or handle it.
-        // API docs say password is optional? Let's check. 
-        // If not provided, user might need to set it via "Forgot Password". 
-        // Admin usually sets a temp one.
         if (password) payload.password = password
+        if (sendWelcomeEmail) payload.send_welcome_email = true
 
         const response = await client.post('/users', payload)
 
@@ -740,10 +747,20 @@ export async function createUser(firstName, lastName, email, company, password) 
         return { success: true, user: response.data }
     } catch (error) {
         console.error('Create user failed:', error.response?.data || error.message)
-        const msg = error.response?.data?.errors?.email?.[0]
-            ? `Email ${email} is already taken.`
-            : (error.response?.data?.errors?.base?.[0] || 'User creation failed')
-        return { success: false, message: msg }
+        const thinkificError = error.response?.data
+        let errorMsg = 'User creation failed'
+
+        if (thinkificError?.errors?.email?.[0]) {
+            errorMsg = `Email ${email} is already taken.`
+        } else if (thinkificError) {
+            if (thinkificError.errors?.base?.[0]) errorMsg = thinkificError.errors.base[0]
+            else if (typeof thinkificError === 'object') errorMsg = JSON.stringify(thinkificError)
+            else errorMsg = String(thinkificError)
+        } else if (error.message) {
+            errorMsg = error.message
+        }
+
+        return { success: false, message: errorMsg }
     }
 }
 
@@ -760,6 +777,15 @@ export async function updateUser(userId, data) {
         return { success: true, user: response.data }
     } catch (error) {
         console.error('Update user failed:', error.response?.data || error.message)
-        return { success: false, message: 'Update failed' }
+        const thinkificError = error.response?.data
+        let errorMsg = 'Update failed'
+        if (thinkificError) {
+            if (thinkificError.errors?.base?.[0]) errorMsg = thinkificError.errors.base[0]
+            else if (typeof thinkificError === 'object') errorMsg = JSON.stringify(thinkificError)
+            else errorMsg = String(thinkificError)
+        } else if (error.message) {
+            errorMsg = error.message
+        }
+        return { success: false, message: errorMsg }
     }
 }

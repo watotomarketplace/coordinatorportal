@@ -16,6 +16,7 @@ import weeklyReportRoutes from './routes/weekly-reports.js'
 import settingsRoutes from './routes/settings.js'
 import checkpointRoutes from './routes/checkpoints.js'
 import formationDashboardRoutes from './routes/formation-dashboard.js'
+import attendanceRoutes from './routes/attendance.js'
 import techSupportRoutes from './routes/tech-support.js'
 import exportRoutes from './routes/exports.js'
 import { initDatabase } from './db/init.js'
@@ -84,6 +85,7 @@ app.use('/api/reports', weeklyReportRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/checkpoints', checkpointRoutes)
 app.use('/api/formation-dashboard', formationDashboardRoutes)
+app.use('/api/attendance', attendanceRoutes)
 app.use('/api/tech-support', techSupportRoutes)
 app.use('/api/exports', exportRoutes)
 app.use('/api/public', imageRoutes)
@@ -93,13 +95,11 @@ app.get('/api/health', async (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(join(__dirname, '../dist')))
-    app.get('*', async (req, res) => {
-        res.sendFile(join(__dirname, '../dist/index.html'))
-    })
-}
+// Serve static files (pre-built React frontend)
+app.use(express.static(join(__dirname, '../dist')))
+app.get('*', async (req, res) => {
+    res.sendFile(join(__dirname, '../dist/index.html'))
+})
 
 // Global Error Handler
 app.use((err, req, res, next) => {

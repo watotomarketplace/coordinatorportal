@@ -16,16 +16,12 @@ const router = express.Router()
 const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'Facilitator']
 const ALL_VALID_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'Facilitator', 'TechSupport']
 
-/**
- * Middleware: Admin OR TechSupport (for user management).
- * TechSupport can only manage Facilitator accounts at their campus.
- */
 function requireUserManager(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
     const role = req.session.user.role
-    if (role !== 'Admin' && role !== 'TechSupport') {
+    if (!['Admin', 'TechSupport', 'Pastor', 'Coordinator'].includes(role)) {
         return res.status(403).json({ success: false, message: 'Access denied' })
     }
     next()
@@ -37,10 +33,15 @@ router.get('/users', requireUserManager, async (req, res) => {
         const currentUser = req.session.user
         let users = await dbAll('SELECT id, username, name, role, celebration_point, profile_image, active, created_at FROM users ORDER BY name')
 
-        // TechSupport: filter to Facilitator accounts at their campus only
-        if (currentUser.role === 'TechSupport') {
+        // Filter based on role restrictions
+        if (currentUser.role === 'TechSupport' || currentUser.role === 'Coordinator') {
             users = users.filter(u =>
                 u.role === 'Facilitator' &&
+                u.celebration_point === currentUser.celebration_point
+            )
+        } else if (currentUser.role === 'Pastor') {
+            users = users.filter(u =>
+                (u.role === 'Facilitator' || u.role === 'Coordinator') &&
                 u.celebration_point === currentUser.celebration_point
             )
         }
@@ -67,9 +68,12 @@ router.post('/users', requireUserManager, async (req, res) => {
             return res.json({ success: false, message: `Invalid role: ${role}` })
         }
 
-        // TechSupport can only create Facilitator accounts
-        if (currentUser.role === 'TechSupport' && role !== 'Facilitator') {
-            return res.status(403).json({ success: false, message: 'Tech Support can only create Facilitator accounts' })
+        // Validate creation permissions based on role
+        if (['TechSupport', 'Coordinator'].includes(currentUser.role) && role !== 'Facilitator') {
+            return res.status(403).json({ success: false, message: `${currentUser.role}s can only create Facilitator accounts` })
+        }
+        if (currentUser.role === 'Pastor' && !['Facilitator', 'Coordinator'].includes(role)) {
+            return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator or Facilitator accounts' })
         }
 
         // Campus-scoped roles require a celebration_point
@@ -77,8 +81,8 @@ router.post('/users', requireUserManager, async (req, res) => {
             return res.json({ success: false, message: `${role} must have a Celebration Point` })
         }
 
-        // TechSupport: force their own campus
-        const finalCelebrationPoint = (currentUser.role === 'TechSupport')
+        // Non-Admins: force their own campus
+        const finalCelebrationPoint = (['TechSupport', 'Pastor', 'Coordinator'].includes(currentUser.role))
             ? currentUser.celebration_point
             : (celebration_point || null)
 
@@ -137,14 +141,22 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
             return res.json({ success: false, message: `Invalid role: ${role}` })
         }
 
-        // TechSupport can only edit Facilitator accounts
-        if (currentUser.role === 'TechSupport') {
+        // Restrict edits based on role
+        if (['TechSupport', 'Coordinator'].includes(currentUser.role)) {
             const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
             if (!target || target.role !== 'Facilitator' || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'Tech Support can only edit Facilitator accounts at their campus' })
+                return res.status(403).json({ success: false, message: 'You can only edit Facilitator accounts at your campus' })
             }
             if (role !== 'Facilitator') {
-                return res.status(403).json({ success: false, message: 'Tech Support cannot change role away from Facilitator' })
+                return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator' })
+            }
+        } else if (currentUser.role === 'Pastor') {
+            const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
+            if (!target || !['Facilitator', 'Coordinator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
+                return res.status(403).json({ success: false, message: 'You can only edit Facilitator or Coordinator accounts at your campus' })
+            }
+            if (!['Facilitator', 'Coordinator'].includes(role)) {
+                return res.status(403).json({ success: false, message: 'Cannot elevate role outside of Facilitator/Coordinator' })
             }
         }
 
@@ -179,11 +191,16 @@ router.delete('/users/:id', requireUserManager, async (req, res) => {
         const currentUser = req.session.user
         const { id } = req.params
 
-        // TechSupport can only deactivate Facilitator accounts at their campus
-        if (currentUser.role === 'TechSupport') {
+        // Restrict deactivation based on role
+        if (['TechSupport', 'Coordinator'].includes(currentUser.role)) {
             const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
             if (!target || target.role !== 'Facilitator' || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'Tech Support can only deactivate Facilitator accounts at their campus' })
+                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator accounts at your campus' })
+            }
+        } else if (currentUser.role === 'Pastor') {
+            const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
+            if (!target || !['Facilitator', 'Coordinator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
+                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator or Coordinator accounts at your campus' })
             }
         }
 
@@ -207,9 +224,9 @@ router.delete('/users/:id/permanent', requireUserManager, async (req, res) => {
         const currentUser = req.session.user
         const { id } = req.params
 
-        // TechSupport cannot permanently delete users, only deactivate
-        if (currentUser.role === 'TechSupport') {
-            return res.status(403).json({ success: false, message: 'Tech Support cannot permanently delete users' })
+        // Non-Admins cannot permanently delete users, only deactivate
+        if (currentUser.role !== 'Admin') {
+            return res.status(403).json({ success: false, message: 'Only Admins can permanently delete users. Please use deactivation instead.' })
         }
 
         // Protect Admin

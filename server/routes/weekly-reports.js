@@ -51,7 +51,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
 // --- GET REPORT DETAIL ---
 router.get('/sync-status', requireAuth, async (req, res) => {
     try {
-        const status = getSyncStatus()
+        const status = await getSyncStatus()  // 2705 FIX: was missing await
         res.json({ success: true, ...status })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to get sync status' })
@@ -79,15 +79,32 @@ router.get('/summary', requireAuth, async (req, res) => {
         if (campus) { conditions.push('fg.celebration_point = ?'); params.push(campus) }
         if (week) { conditions.push('wr.week_number = ?'); params.push(week) }
 
-        // Group-level submission status
+        // Group-level submission status — single query with LEFT JOIN instead of 3 correlated subqueries
         const groups = await dbAll(`
             SELECT fg.id, fg.group_code, fg.name, fg.celebration_point,
                    u.name as facilitator_name,
-                   (SELECT COUNT(*) FROM weekly_reports WHERE formation_group_id = fg.id) as total_reports,
-                   (SELECT MAX(week_number) FROM weekly_reports WHERE formation_group_id = fg.id) as latest_week,
-                   (SELECT engagement_level FROM weekly_reports WHERE formation_group_id = fg.id ORDER BY week_number DESC LIMIT 1) as latest_engagement
+                   COALESCE(rs.total_reports, 0) as total_reports,
+                   rs.latest_week,
+                   rs.latest_engagement
             FROM formation_groups fg
             LEFT JOIN users u ON fg.facilitator_user_id = u.id
+            LEFT JOIN (
+                SELECT formation_group_id,
+                       COUNT(*) as total_reports,
+                       MAX(week_number) as latest_week
+                FROM weekly_reports
+                GROUP BY formation_group_id
+            ) rs ON rs.formation_group_id = fg.id
+            LEFT JOIN (
+                SELECT wr2.formation_group_id, wr2.engagement_level as latest_engagement
+                FROM weekly_reports wr2
+                INNER JOIN (
+                    SELECT formation_group_id, MAX(week_number) as max_week
+                    FROM weekly_reports
+                    GROUP BY formation_group_id
+                ) mx ON mx.formation_group_id = wr2.formation_group_id
+                       AND mx.max_week = wr2.week_number
+            ) le ON le.formation_group_id = fg.id
             WHERE fg.active = 1 ${campus ? 'AND fg.celebration_point = ?' : ''}
             ORDER BY fg.group_code
         `, campus ? [campus] : [])

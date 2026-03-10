@@ -21,6 +21,112 @@
 
 <body>
   <div id="root"></div>
+
+  <!-- INJECTED: macOS UI Window Controls -->
+  <style>
+    /* macOS-style window resizing for all modals */
+    .modal-overlay .modal,
+    .modal-overlay .glass-card.modal,
+    .settings-modal-window {
+      resize: both;
+      overflow: auto !important;
+      min-width: 380px;
+      min-height: 320px;
+      position: relative;
+    }
+
+    /* Make SURE buttons are clickable regardless of Title bar drag areas */
+    .traffic-btn,
+    .traffic-btn.red,
+    .traffic-btn.yellow,
+    .traffic-btn.green,
+    button[style*="background:#ff5f56"],
+    div[style*="background:#ffbd2e"],
+    div[style*="background:#27c93f"] {
+      -webkit-app-region: no-drag !important;
+      pointer-events: auto !important;
+      z-index: 99999 !important;
+      position: relative;
+    }
+
+    /* Resize handle visual indicator in the bottom right corner */
+    .modal-overlay .modal::after,
+    .settings-modal-window::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 40%, rgba(255, 255, 255, 0.3) 40%, rgba(255, 255, 255, 0.3) 50%, transparent 50%, transparent 60%, rgba(255, 255, 255, 0.3) 60%, rgba(255, 255, 255, 0.3) 70%, transparent 70%);
+      z-index: 99999;
+      pointer-events: none;
+    }
+
+    /* Maximized state toggled by the Green button */
+    .modal-maximized {
+      width: calc(100vw - 40px) !important;
+      height: calc(100vh - 80px) !important;
+      max-width: none !important;
+      max-height: none !important;
+      border-radius: 12px !important;
+      transition: all 0.3s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    /* Minimized state toggled by the Yellow button */
+    .modal-minimized {
+      transform: scale(0.01) !important;
+      opacity: 0 !important;
+      transition: all 0.4s cubic-bezier(.22, 1, .36, 1);
+      pointer-events: none !important;
+    }
+  </style>
+
+  <script>
+    // Bulletproof click handler for traffic light buttons
+    document.addEventListener('click', function (e) {
+      if (!e.isTrusted) return; // ignore script-triggered clicks to prevent loops
+
+      const el = e.target;
+
+      // 🟢 GREEN: Maximize window
+      // Match classes or the specific inline style used in User Management
+      if (el.matches('.traffic-btn.green') || (el.tagName === 'DIV' && el.style.background === 'rgb(39, 201, 63)')) {
+        e.stopPropagation();
+        e.preventDefault();
+        const modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
+        if (modal) modal.classList.toggle('modal-maximized');
+        return;
+      }
+
+      // 🟡 YELLOW: Minimize window
+      // Match classes or the specific inline style
+      if (el.matches('.traffic-btn.yellow') || (el.tagName === 'DIV' && el.style.background === 'rgb(255, 189, 46)')) {
+        e.stopPropagation();
+        e.preventDefault();
+        const overlay = el.closest('.modal-overlay');
+        const modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
+        if (modal) {
+          modal.classList.add('modal-minimized');
+          // Wait for animation, then hide the overlay entirely
+          setTimeout(() => { if (overlay) overlay.style.display = 'none'; }, 400);
+        }
+        return;
+      }
+
+      // 🔴 RED: Close window (Only intercept if original React handler failed)
+      // Note: React usually handles the red button beautifully, but we'll add a fallback
+      if (el.matches('.traffic-btn.red') || (el.tagName === 'BUTTON' && el.style.background === 'rgb(255, 95, 86)')) {
+        // We let the event bubble to trigger React's onClose, but just in case it doesn't work:
+        setTimeout(() => {
+          const overlay = el.closest('.modal-overlay');
+          // If the overlay is STILL in the document 100ms later, forcefully hide it
+          if (overlay && overlay.isConnected) overlay.style.display = 'none';
+        }, 100);
+      }
+    }, true);
+  </script>
 </body>
 
 </html>

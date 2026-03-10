@@ -153,6 +153,12 @@ async function runMigrations() {
     )
   `)
 
+  // ─── Performance Indexes ───────────────────────────────────────
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_wr_group_week ON weekly_reports(formation_group_id, week_number)`)
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_wr_facilitator ON weekly_reports(facilitator_user_id)`)
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_fg_campus_active ON formation_groups(celebration_point, active)`)
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_fgm_group ON formation_group_members(formation_group_id)`)
+
   await dbRun(`
     CREATE TABLE IF NOT EXISTS system_settings (
       key TEXT PRIMARY KEY,
@@ -208,6 +214,54 @@ async function runMigrations() {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       )
     `)
+
+  // ─── Attendance Feature Tables ─────────────────────────────────
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS group_members (
+      id ${getPK()},
+      formation_group_id INTEGER NOT NULL,
+      student_thinkific_id TEXT,
+      student_name TEXT NOT NULL,
+      student_email TEXT,
+      added_by_user_id INTEGER,
+      active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_gm_group ON group_members(formation_group_id, active)`)
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS group_sessions (
+      id ${getPK()},
+      formation_group_id INTEGER NOT NULL,
+      session_date TEXT NOT NULL,
+      week_number INTEGER,
+      facilitator_user_id INTEGER,
+      notes TEXT,
+      did_not_meet INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_gs_group ON group_sessions(formation_group_id)`)
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS session_attendance (
+      id ${getPK()},
+      session_id INTEGER NOT NULL,
+      group_member_id INTEGER NOT NULL,
+      attended INTEGER DEFAULT 0,
+      note TEXT,
+      UNIQUE(session_id, group_member_id)
+    )
+  `)
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sa_session ON session_attendance(session_id)`)
+
+  // Add name fields to formation_group_members (safe no-op if columns already exist)
+  try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_name TEXT') } catch (_) {}
+  try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_email TEXT') } catch (_) {}
 
   // Check if admin exists
   const existingAdmin = await dbGet("SELECT id FROM users WHERE role = 'Admin'")

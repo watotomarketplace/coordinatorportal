@@ -232,7 +232,7 @@ router.post('/:id/members', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
-        const { student_id } = req.body
+        const { student_id, student_name, student_email } = req.body
         const groupId = req.params.id
 
         if (!student_id) {
@@ -258,8 +258,8 @@ router.post('/:id/members', requireAuth, async (req, res) => {
         }
 
         await dbRun(
-            'INSERT INTO formation_group_members (formation_group_id, student_id) VALUES (?, ?)',
-            [groupId, student_id]
+            'INSERT INTO formation_group_members (formation_group_id, student_id, student_name, student_email) VALUES (?, ?, ?, ?)',
+            [groupId, student_id, student_name || null, student_email || null]
         )
 
         res.json({ success: true })

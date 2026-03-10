@@ -2,6 +2,7 @@ import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAdmin } from '../middleware/rbac.js'
 import { restartAutoSync, getSyncStatus } from '../services/notion-sync.js'
+import { Client as NotionClient } from '@notionhq/client'
 
 const router = express.Router()
 
@@ -65,8 +66,7 @@ router.post('/test-notion', requireAdmin, async (req, res) => {
             return res.json({ success: false, message: 'Notion credentials not configured' })
         }
 
-        const { Client } = await import('@notionhq/client')
-        const notion = new Client({ auth: apiKey.value })
+        const notion = new NotionClient({ auth: apiKey.value })
 
         // Try querying the database (just 1 page to test)
         const response = await notion.databases.query({

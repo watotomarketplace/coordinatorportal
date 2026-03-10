@@ -42,12 +42,15 @@ async function getNotionConfig() {
     const dbId    = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_db_id'")
     const interval = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_sync_interval'")
 
-    if (!apiKey?.value || !dbId?.value) return null
+    const effectiveApiKey = apiKey?.value || process.env.NOTION_API_KEY
+    const effectiveDbId   = dbId?.value   || process.env.NOTION_DB_ID
+
+    if (!effectiveApiKey || !effectiveDbId) return null
 
     return {
-        apiKey: apiKey.value,
-        databaseId: dbId.value,
-        syncIntervalMinutes: parseInt(interval?.value || '15', 10)
+        apiKey: effectiveApiKey,
+        databaseId: effectiveDbId,
+        syncIntervalMinutes: parseInt(interval?.value || process.env.NOTION_SYNC_INTERVAL || '15', 10)
     }
 }
 

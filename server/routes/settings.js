@@ -62,15 +62,18 @@ router.post('/test-notion', requireAdmin, async (req, res) => {
         const apiKey = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_api_key'")
         const dbId = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_db_id'")
 
-        if (!apiKey?.value || !dbId?.value) {
+        const effectiveApiKey = apiKey?.value || process.env.NOTION_API_KEY
+        const effectiveDbId   = dbId?.value   || process.env.NOTION_DB_ID
+
+        if (!effectiveApiKey || !effectiveDbId) {
             return res.json({ success: false, message: 'Notion credentials not configured' })
         }
 
-        const notion = new NotionClient({ auth: apiKey.value })
+        const notion = new NotionClient({ auth: effectiveApiKey })
 
         // Try querying the database (just 1 page to test)
         const response = await notion.databases.query({
-            database_id: dbId.value,
+            database_id: effectiveDbId,
             page_size: 1
         })
 

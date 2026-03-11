@@ -1,6 +1,6 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
-import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
 
 const router = express.Router()
 
@@ -158,13 +158,23 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
 })
 
-// --- CREATE GROUP (Admin only) ---
-router.post('/', requireAdmin, async (req, res) => {
+// --- CREATE GROUP (Admin, TechSupport) ---
+router.post('/', requireAuth, async (req, res) => {
     try {
+        const user = req.session.user
+        if (!userHasAnyRole(user, ['Admin', 'TechSupport'])) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+
         const { name, celebration_point, facilitator_user_id, cohort, group_code } = req.body
 
         if (!name || !celebration_point) {
             return res.status(400).json({ success: false, message: 'Name and Celebration Point are required' })
+        }
+
+        // TechSupport can only create groups at their own campus
+        if (!userHasAnyRole(user, ['Admin']) && user.celebration_point && celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: 'You can only create groups at your assigned campus' })
         }
 
         // Use provided group_code or auto-generate
@@ -188,15 +198,25 @@ router.post('/', requireAdmin, async (req, res) => {
     }
 })
 
-// --- UPDATE GROUP (Admin only) ---
-router.put('/:id', requireAdmin, async (req, res) => {
+// --- UPDATE GROUP (Admin, TechSupport) ---
+router.put('/:id', requireAuth, async (req, res) => {
     try {
+        const user = req.session.user
+        if (!userHasAnyRole(user, ['Admin', 'TechSupport'])) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+
         const { name, celebration_point, facilitator_user_id, cohort, active } = req.body
         const { id } = req.params
 
-        const group = await dbGet('SELECT id FROM formation_groups WHERE id = ?', [id])
+        const group = await dbGet('SELECT id, celebration_point FROM formation_groups WHERE id = ?', [id])
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' })
+        }
+
+        // TechSupport can only update groups at their own campus
+        if (!userHasAnyRole(user, ['Admin']) && user.celebration_point && group.celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
         }
 
         await dbRun(
@@ -228,7 +248,7 @@ router.put('/:id', requireAdmin, async (req, res) => {
 router.post('/:id/members', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!['Admin', 'Coordinator'].includes(user.role)) {
+        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
@@ -273,7 +293,7 @@ router.post('/:id/members', requireAuth, async (req, res) => {
 router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!['Admin', 'Coordinator'].includes(user.role)) {
+        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 

@@ -273,4 +273,74 @@ router.get('/group/:groupId/summary', async (req, res) => {
     }
 })
 
+// 7. Attendance overview dashboard — scoped to user's role/campus
+router.get('/dashboard', async (req, res) => {
+    try {
+        const user = req.session.user
+        let whereClause = 'WHERE fg.active = 1'
+        let params = []
+
+        if (user.role === 'Facilitator') {
+            whereClause += ' AND fg.facilitator_user_id = ?'
+            params = [user.id]
+        } else if (!['Admin', 'LeadershipTeam'].includes(user.role) && user.celebration_point) {
+            whereClause += ' AND fg.celebration_point = ?'
+            params = [user.celebration_point]
+        }
+
+        const groups = await dbAll(`
+            SELECT fg.id, fg.group_code, fg.name, fg.celebration_point,
+                COUNT(DISTINCT gs.id) as total_sessions,
+                COUNT(DISTINCT gm.id) as member_count
+            FROM formation_groups fg
+            LEFT JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
+            LEFT JOIN group_members gm ON gm.formation_group_id = fg.id AND gm.active = 1
+            ${whereClause}
+            GROUP BY fg.id, fg.group_code, fg.name, fg.celebration_point
+            ORDER BY total_sessions DESC, fg.group_code
+        `, params)
+
+        // Attendance totals scoped to those groups
+        const groupIds = groups.map(g => g.id)
+        let attMap = {}
+        if (groupIds.length > 0) {
+            const placeholders = groupIds.map(() => '?').join(',')
+            const attRows = await dbAll(`
+                SELECT gs.formation_group_id,
+                    SUM(CASE WHEN sa.attended = 1 THEN 1 ELSE 0 END) as attended,
+                    COUNT(sa.id) as possible
+                FROM group_sessions gs
+                JOIN session_attendance sa ON sa.session_id = gs.id
+                WHERE gs.did_not_meet = 0 AND gs.formation_group_id IN (${placeholders})
+                GROUP BY gs.formation_group_id
+            `, groupIds)
+            for (const r of attRows) attMap[r.formation_group_id] = r
+        }
+
+        const result = groups.map(g => ({
+            ...g,
+            attended: Number(attMap[g.id]?.attended || 0),
+            possible: Number(attMap[g.id]?.possible || 0),
+            avg_pct: Number(attMap[g.id]?.possible || 0) > 0
+                ? Math.round((Number(attMap[g.id].attended) / Number(attMap[g.id].possible)) * 100)
+                : null
+        }))
+
+        const totalSessions = result.reduce((s, g) => s + Number(g.total_sessions || 0), 0)
+        const groupsWithSessions = result.filter(g => Number(g.total_sessions) > 0).length
+        const totalAttended = result.reduce((s, g) => s + g.attended, 0)
+        const totalPossible = result.reduce((s, g) => s + g.possible, 0)
+        const overallPct = totalPossible > 0 ? Math.round((totalAttended / totalPossible) * 100) : null
+
+        res.json({
+            success: true,
+            summary: { totalSessions, groupsWithSessions, overallPct, totalGroups: result.length },
+            groups: result
+        })
+    } catch (error) {
+        console.error('Attendance dashboard error:', error)
+        res.status(500).json({ success: false, message: 'Failed to load dashboard' })
+    }
+})
+
 export default router

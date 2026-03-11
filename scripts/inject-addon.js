@@ -138,6 +138,75 @@ function run() {
         console.warn('Could not find addMember onClick to patch.');
     }
 
+    // --- Patch member table: header "Student ID" → "Member" ---
+    const memberHeaderOld = 'e.jsx("th",{style:we,children:"Student ID"})';
+    const memberHeaderNew = 'e.jsx("th",{style:we,children:"Member"})';
+    if (code.includes(memberHeaderOld)) {
+        code = code.replace(memberHeaderOld, memberHeaderNew);
+        console.log('Patched member table header.');
+    } else {
+        console.warn('Could not find member table header to patch.');
+    }
+
+    // --- Patch member table: show avatar + name instead of raw student_id ---
+    const memberCellOld = 'e.jsx("td",{style:Se,children:T.student_id})';
+    const memberCellNew =
+        'e.jsx("td",{style:Se,children:' +
+        'e.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8},children:[' +
+        'e.jsx("div",{style:{width:28,height:28,borderRadius:"50%",background:"linear-gradient(135deg,#4A9EFF,#8B5CF6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",flexShrink:0},' +
+        'children:(T.student_name||String(T.student_id)).charAt(0).toUpperCase()}),' +
+        'e.jsx("span",{style:{fontSize:14},children:T.student_name||T.student_id})]})})';
+    if (code.includes(memberCellOld)) {
+        code = code.replace(memberCellOld, memberCellNew);
+        console.log('Patched member table cell to show avatar + name.');
+    } else {
+        console.warn('Could not find member table cell to patch.');
+    }
+
+    // --- Inject DashboardWidget after FormationWidgets in Dashboard ---
+    // Dashboard renders: ...e.jsx(Mt,{campus:n}),u&&h.length>0&&...
+    // We insert the DashboardWidget between FormationWidgets and the Facilitator groups section.
+    const dashWidgetTarget = 'e.jsx(Mt,{campus:n}),u&&h.length>0';
+    const dashWidgetReplace =
+        'e.jsx(Mt,{campus:n}),' +
+        'window.__ATTENDANCE_ADDON__&&window.__ATTENDANCE_ADDON__.DashboardWidget' +
+        '?e.jsx(window.__ATTENDANCE_ADDON__.DashboardWidget,{})' +
+        ':null,' +
+        'u&&h.length>0';
+    if (code.includes(dashWidgetTarget)) {
+        code = code.replace(dashWidgetTarget, dashWidgetReplace);
+        console.log('Injected DashboardWidget into Dashboard page.');
+    } else {
+        console.warn('Could not find Dashboard FormationWidgets call to inject DashboardWidget.');
+    }
+
+    // --- Patch FormationWidgets: show empty state instead of returning null when no data ---
+    // When hasAnyData is false the ternary returns null. Replace :null with an empty-state card
+    // that still shows the "Formation Layer" header + guidance message.
+    const fwNullTarget = '):null}const ie={background:"var(--glass-layer-2)"';
+    const fwEmptyState =
+        ':e.jsxs("div",{style:{marginTop:24},children:[' +
+        'e.jsxs("h2",{style:{fontSize:17,fontWeight:700,color:"var(--text-primary)",marginBottom:16,display:"flex",alignItems:"center",gap:8},children:[' +
+        'e.jsx("span",{style:{width:28,height:28,borderRadius:8,display:"inline-flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, #667eea 0%, #764ba2 100%)",fontSize:14},children:"\\uD83C\\uDF31"}),' +
+        '"Formation Layer"' +
+        ']}),' +
+        'e.jsx("div",{style:{background:"var(--glass-layer-2)",backdropFilter:"var(--blur-layer-2)",border:"var(--border-layer-2)",borderRadius:16,padding:"32px 24px",textAlign:"center"},children:' +
+        'e.jsxs("div",{children:[' +
+        'e.jsx("div",{style:{fontSize:32,marginBottom:10},children:"\\uD83D\\uDCCA"}),' +
+        'e.jsx("div",{style:{fontSize:14,fontWeight:600,color:"var(--text-primary)",marginBottom:6},children:"No formation data yet"}),' +
+        'e.jsx("div",{style:{fontSize:12,color:"rgba(255,255,255,0.4)",lineHeight:1.5},children:"Submit weekly reports to see engagement trends, pastoral concerns, and checkpoint status"})' +
+        ']})' +
+        '})' +
+        ']})}';
+    // The target starts with ')' which closes the true-branch e.jsxs() call — keep it.
+    const fwNullReplace = ')' + fwEmptyState + 'const ie={background:"var(--glass-layer-2)"';
+    if (code.includes(fwNullTarget)) {
+        code = code.replace(fwNullTarget, fwNullReplace);
+        console.log('Patched FormationWidgets to show empty state instead of null.');
+    } else {
+        console.warn('Could not find FormationWidgets null branch to patch.');
+    }
+
     fs.writeFileSync('dist/assets/index-BosXJrON.js', code);
     console.log('Injection complete. Target file overridden successfully.');
 }

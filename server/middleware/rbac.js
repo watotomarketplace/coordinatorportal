@@ -21,6 +21,25 @@ const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'Facilitato
 // Roles with global (all-campus) visibility
 const GLOBAL_ROLES = ['Admin', 'LeadershipTeam']
 
+// --- Helpers ---
+
+/** Parse user roles from session (supports both single role and roles array) */
+function getUserRoles(user) {
+    if (user.roles && Array.isArray(user.roles)) return user.roles
+    if (user.roles && typeof user.roles === 'string') return user.roles.split(',').map(r => r.trim())
+    return [user.role]
+}
+
+/** Check if user has a specific role */
+function userHasRole(user, role) {
+    return getUserRoles(user).includes(role)
+}
+
+/** Check if user has ANY of the specified roles */
+function userHasAnyRole(user, roleList) {
+    return getUserRoles(user).some(r => roleList.includes(r))
+}
+
 // --- Core Middleware ---
 
 /** Reject unauthenticated requests */
@@ -36,7 +55,7 @@ export function requireAdmin(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
-    if (req.session.user.role !== 'Admin') {
+    if (!userHasRole(req.session.user, 'Admin')) {
         return res.status(403).json({ success: false, message: 'Admin access required' })
     }
     next()
@@ -47,8 +66,7 @@ export function requireAdminOrLeadership(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
-    const role = req.session.user.role
-    if (role !== 'Admin' && role !== 'LeadershipTeam') {
+    if (!userHasAnyRole(req.session.user, ['Admin', 'LeadershipTeam'])) {
         return res.status(403).json({ success: false, message: 'Access denied' })
     }
     next()
@@ -59,8 +77,7 @@ export function requireAdminOrTechSupport(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
-    const role = req.session.user.role
-    if (role !== 'Admin' && role !== 'TechSupport') {
+    if (!userHasAnyRole(req.session.user, ['Admin', 'TechSupport'])) {
         return res.status(403).json({ success: false, message: 'Access denied' })
     }
     next()
@@ -71,8 +88,7 @@ export function requireCanImport(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
-    const role = req.session.user.role
-    if (role !== 'Admin' && role !== 'Coordinator') {
+    if (!userHasAnyRole(req.session.user, ['Admin', 'Coordinator'])) {
         return res.status(403).json({ success: false, message: 'Access denied' })
     }
     next()
@@ -95,13 +111,16 @@ export function applyCampusScope(req, res, next) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
 
-    const role = req.session.user.role
+    const roles = getUserRoles(req.session.user)
     const requestedCampus = req.query.celebration_point || req.body?.celebration_point || ''
 
-    if (GLOBAL_ROLES.includes(role)) {
+    // If the user has ANY global role, grant global access
+    const hasGlobalRole = roles.some(r => GLOBAL_ROLES.includes(r))
+
+    if (hasGlobalRole) {
         // Global roles can filter by any campus or see all
         req.scopedCelebrationPoint = requestedCampus
-    } else if (CAMPUS_SCOPED_ROLES.includes(role)) {
+    } else if (roles.some(r => CAMPUS_SCOPED_ROLES.includes(r))) {
         // Campus-scoped roles are locked to their assignment
         if (requestedCampus && requestedCampus !== req.session.user.celebration_point) {
             return res.status(403).json({
@@ -118,6 +137,4 @@ export function applyCampusScope(req, res, next) {
     next()
 }
 
-// --- Helpers ---
-
-export { CAMPUS_SCOPED_ROLES, GLOBAL_ROLES }
+export { CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, getUserRoles, userHasRole, userHasAnyRole }

@@ -24,12 +24,18 @@ router.post('/login', async (req, res) => {
             return res.json({ success: false, message: 'Invalid credentials' })
         }
 
+        // Parse roles from comma-separated string into array
+        const rolesArray = user.roles
+            ? user.roles.split(',').map(r => r.trim())
+            : [user.role]
+
         // Set session
         req.session.user = {
             id: user.id,
             username: user.username,
             name: user.name,
             role: user.role,
+            roles: rolesArray,
             celebration_point: user.celebration_point,
             profile_image: user.profile_image
         }

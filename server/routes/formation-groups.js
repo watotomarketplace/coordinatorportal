@@ -134,7 +134,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 
         // Get members
         const members = await dbAll(`
-            SELECT fgm.id as membership_id, fgm.student_id, fgm.joined_at
+            SELECT fgm.id as membership_id, fgm.student_id, fgm.student_name, fgm.student_email, fgm.joined_at
             FROM formation_group_members fgm
             WHERE fgm.formation_group_id = ?
             ORDER BY fgm.joined_at

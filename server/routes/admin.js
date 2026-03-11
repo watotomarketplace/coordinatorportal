@@ -16,12 +16,24 @@ const router = express.Router()
 const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'Facilitator']
 const ALL_VALID_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'Facilitator', 'TechSupport']
 
+// Helper: parse roles from comma-separated string or array
+function parseRoles(input) {
+    if (!input) return []
+    if (Array.isArray(input)) return input.filter(r => ALL_VALID_ROLES.includes(r))
+    return input.split(',').map(r => r.trim()).filter(r => ALL_VALID_ROLES.includes(r))
+}
+
+// Helper: check if a user has any of the specified roles
+function userHasAnyRole(user, roleList) {
+    const userRoles = parseRoles(user.roles || user.role)
+    return userRoles.some(r => roleList.includes(r))
+}
+
 function requireUserManager(req, res, next) {
     if (!req.session.user) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
-    const role = req.session.user.role
-    if (!['Admin', 'TechSupport', 'Pastor', 'Coordinator'].includes(role)) {
+    if (!userHasAnyRole(req.session.user, ['Admin', 'TechSupport', 'Pastor', 'Coordinator'])) {
         return res.status(403).json({ success: false, message: 'Access denied' })
     }
     next()
@@ -31,20 +43,32 @@ function requireUserManager(req, res, next) {
 router.get('/users', requireUserManager, async (req, res) => {
     try {
         const currentUser = req.session.user
-        let users = await dbAll('SELECT id, username, name, role, celebration_point, profile_image, active, created_at FROM users ORDER BY name')
+        let users = await dbAll('SELECT id, username, name, role, roles, celebration_point, profile_image, active, created_at FROM users ORDER BY name')
 
         // Filter based on role restrictions
-        if (currentUser.role === 'TechSupport' || currentUser.role === 'Coordinator') {
-            users = users.filter(u =>
-                u.role === 'Facilitator' &&
-                u.celebration_point === currentUser.celebration_point
-            )
-        } else if (currentUser.role === 'Pastor') {
-            users = users.filter(u =>
-                (u.role === 'Facilitator' || u.role === 'Coordinator') &&
-                u.celebration_point === currentUser.celebration_point
-            )
+        const currentRoles = parseRoles(currentUser.roles || currentUser.role)
+        const isGlobal = currentRoles.some(r => ['Admin', 'LeadershipTeam'].includes(r))
+
+        if (!isGlobal) {
+            const isPastor = currentRoles.includes('Pastor')
+            if (isPastor) {
+                users = users.filter(u => {
+                    const uRoles = parseRoles(u.roles || u.role)
+                    return (uRoles.includes('Facilitator') || uRoles.includes('Coordinator')) &&
+                        u.celebration_point === currentUser.celebration_point
+                })
+            } else {
+                // TechSupport / Coordinator — can only see Facilitators at their campus
+                users = users.filter(u => {
+                    const uRoles = parseRoles(u.roles || u.role)
+                    return uRoles.includes('Facilitator') &&
+                        u.celebration_point === currentUser.celebration_point
+                })
+            }
         }
+
+        // Parse roles into arrays for the frontend
+        users = users.map(u => ({ ...u, roles: u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role] }))
 
         res.json({ success: true, users })
     } catch (error) {
@@ -57,32 +81,47 @@ router.get('/users', requireUserManager, async (req, res) => {
 router.post('/users', requireUserManager, async (req, res) => {
     try {
         const currentUser = req.session.user
-        const { username, password, name, role, celebration_point } = req.body
+        const { username, password, name, celebration_point } = req.body
+        // Support both single role and roles array/string
+        const rolesInput = req.body.roles || req.body.role
+        const rolesList = parseRoles(rolesInput)
+        const primaryRole = rolesList[0] || req.body.role
 
-        if (!username || !password || !name || !role) {
-            return res.json({ success: false, message: 'All fields required' })
+        if (!username || !password || !name || rolesList.length === 0) {
+            return res.json({ success: false, message: 'All fields required (including at least one role)' })
         }
 
-        // Validate role
-        if (!ALL_VALID_ROLES.includes(role)) {
-            return res.json({ success: false, message: `Invalid role: ${role}` })
+        // Validate all roles
+        for (const r of rolesList) {
+            if (!ALL_VALID_ROLES.includes(r)) {
+                return res.json({ success: false, message: `Invalid role: ${r}` })
+            }
         }
 
-        // Validate creation permissions based on role
-        if (['TechSupport', 'Coordinator'].includes(currentUser.role) && role !== 'Facilitator') {
-            return res.status(403).json({ success: false, message: `${currentUser.role}s can only create Facilitator accounts` })
-        }
-        if (currentUser.role === 'Pastor' && !['Facilitator', 'Coordinator'].includes(role)) {
-            return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator or Facilitator accounts' })
+        // Validate creation permissions based on current user's roles
+        const curRoles = parseRoles(currentUser.roles || currentUser.role)
+        const curIsAdmin = curRoles.includes('Admin')
+        const curIsPastor = curRoles.includes('Pastor')
+        const curIsCoordOrTech = curRoles.some(r => ['TechSupport', 'Coordinator'].includes(r))
+
+        if (!curIsAdmin) {
+            if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator')) {
+                return res.status(403).json({ success: false, message: 'You can only create Facilitator accounts' })
+            }
+            if (curIsPastor && !rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
+                return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator or Facilitator accounts' })
+            }
         }
 
         // Campus-scoped roles require a celebration_point
-        if (CAMPUS_SCOPED_ROLES.includes(role) && !celebration_point) {
-            return res.json({ success: false, message: `${role} must have a Celebration Point` })
+        const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
+        if (needsCampus && !celebration_point) {
+            return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
         }
 
         // Non-Admins: force their own campus
-        const finalCelebrationPoint = (['TechSupport', 'Pastor', 'Coordinator'].includes(currentUser.role))
+        const curIsCampusScoped = curRoles.some(r => ['TechSupport', 'Pastor', 'Coordinator'].includes(r))
+        const finalCelebrationPoint = (!curIsAdmin && curIsCampusScoped)
             ? currentUser.celebration_point
             : (celebration_point || null)
 
@@ -112,10 +151,11 @@ router.post('/users', requireUserManager, async (req, res) => {
         }
 
         const hashedPassword = bcrypt.hashSync(password, 10)
+        const rolesString = rolesList.join(',')
 
         const result = await dbRun(
-            'INSERT INTO users (username, password, name, role, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
-            [username, hashedPassword, name, role, finalCelebrationPoint, selectedImage || null]
+            'INSERT INTO users (username, password, name, role, roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+            [username, hashedPassword, name, primaryRole, rolesString, finalCelebrationPoint, selectedImage || null]
         )
 
         res.json({ success: true, userId: result.lastInsertRowid })
@@ -130,51 +170,67 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
     try {
         const currentUser = req.session.user
         const { id } = req.params
-        const { password, name, role, celebration_point } = req.body
+        const { password, name, celebration_point } = req.body
+        const rolesInput = req.body.roles || req.body.role
+        const rolesList = parseRoles(rolesInput)
+        const primaryRole = rolesList[0] || req.body.role
 
-        if (!name || !role) {
-            return res.json({ success: false, message: 'Name and role required' })
+        if (!name || rolesList.length === 0) {
+            return res.json({ success: false, message: 'Name and at least one role required' })
         }
 
-        // Validate role
-        if (!ALL_VALID_ROLES.includes(role)) {
-            return res.json({ success: false, message: `Invalid role: ${role}` })
+        // Validate all roles
+        for (const r of rolesList) {
+            if (!ALL_VALID_ROLES.includes(r)) {
+                return res.json({ success: false, message: `Invalid role: ${r}` })
+            }
         }
 
-        // Restrict edits based on role
-        if (['TechSupport', 'Coordinator'].includes(currentUser.role)) {
-            const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
-            if (!target || target.role !== 'Facilitator' || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'You can only edit Facilitator accounts at your campus' })
-            }
-            if (role !== 'Facilitator') {
-                return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator' })
-            }
-        } else if (currentUser.role === 'Pastor') {
-            const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
-            if (!target || !['Facilitator', 'Coordinator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'You can only edit Facilitator or Coordinator accounts at your campus' })
-            }
-            if (!['Facilitator', 'Coordinator'].includes(role)) {
-                return res.status(403).json({ success: false, message: 'Cannot elevate role outside of Facilitator/Coordinator' })
+        // Restrict edits based on current user's roles
+        const curRoles = parseRoles(currentUser.roles || currentUser.role)
+        const curIsAdmin = curRoles.includes('Admin')
+        const curIsPastor = curRoles.includes('Pastor')
+        const curIsCoordOrTech = curRoles.some(r => ['TechSupport', 'Coordinator'].includes(r))
+
+        if (!curIsAdmin) {
+            const target = await dbGet('SELECT role, roles, celebration_point FROM users WHERE id = ?', [id])
+            const tgtRoles = parseRoles(target?.roles || target?.role)
+
+            if (curIsCoordOrTech && !curIsPastor) {
+                if (!target || !tgtRoles.includes('Facilitator') || target.celebration_point !== currentUser.celebration_point) {
+                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator accounts at your campus' })
+                }
+                if (!rolesList.every(r => r === 'Facilitator')) {
+                    return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator' })
+                }
+            } else if (curIsPastor) {
+                if (!target || !tgtRoles.some(r => ['Facilitator', 'Coordinator'].includes(r)) || target.celebration_point !== currentUser.celebration_point) {
+                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator or Coordinator accounts at your campus' })
+                }
+                if (!rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
+                    return res.status(403).json({ success: false, message: 'Cannot elevate role outside of Facilitator/Coordinator' })
+                }
             }
         }
 
         // Campus-scoped roles require a celebration_point
-        if (CAMPUS_SCOPED_ROLES.includes(role) && !celebration_point) {
-            return res.json({ success: false, message: `${role} must have a Celebration Point` })
+        const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
+        if (needsCampus && !celebration_point) {
+            return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
         }
+
+        const rolesString = rolesList.join(',')
 
         if (password) {
             const hashedPassword = bcrypt.hashSync(password, 10)
             await dbRun(
-                'UPDATE users SET password = ?, name = ?, role = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [hashedPassword, name, role, celebration_point || null, req.body.profile_image || null, id]
+                'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [hashedPassword, name, primaryRole, rolesString, celebration_point || null, req.body.profile_image || null, id]
             )
         } else {
             await dbRun(
-                'UPDATE users SET name = ?, role = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [name, role, celebration_point || null, req.body.profile_image || null, id]
+                'UPDATE users SET name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [name, primaryRole, rolesString, celebration_point || null, req.body.profile_image || null, id]
             )
         }
 

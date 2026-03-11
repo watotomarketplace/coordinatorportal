@@ -263,6 +263,11 @@ async function runMigrations() {
   try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_name TEXT') } catch (_) {}
   try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_email TEXT') } catch (_) {}
 
+  // ─── Dual Permissions: add 'roles' column (comma-separated) ───
+  try { await dbRun('ALTER TABLE users ADD COLUMN roles TEXT') } catch (_) {}
+  // Backfill: copy single 'role' into 'roles' for any users that haven't been migrated
+  try { await dbRun("UPDATE users SET roles = role WHERE roles IS NULL") } catch (_) {}
+
   // Check if admin exists
   const existingAdmin = await dbGet("SELECT id FROM users WHERE role = 'Admin'")
 

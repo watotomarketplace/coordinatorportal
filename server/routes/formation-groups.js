@@ -246,11 +246,11 @@ router.put('/:id', requireAuth, async (req, res) => {
     }
 })
 
-// --- ADD MEMBER (Admin, Coordinator) ---
+// --- ADD MEMBER (Admin, Coordinator, TechSupport, Facilitator) ---
 router.post('/:id/members', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport'])) {
+        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport', 'Facilitator'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
@@ -295,11 +295,11 @@ router.post('/:id/members', requireAuth, async (req, res) => {
     }
 })
 
-// --- REMOVE MEMBER (Admin, Coordinator) ---
+// --- REMOVE MEMBER (Admin, Coordinator, TechSupport, Facilitator) ---
 router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport'])) {
+        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport', 'Facilitator'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 

@@ -160,11 +160,11 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
 })
 
-// --- CREATE GROUP (Admin, TechSupport) ---
+// --- CREATE GROUP (Admin, TechSupport, Coordinator) ---
 router.post('/', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'TechSupport'])) {
+        if (!userHasAnyRole(user, ['Admin', 'TechSupport', 'Coordinator'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
@@ -200,11 +200,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 })
 
-// --- UPDATE GROUP (Admin, TechSupport) ---
+// --- UPDATE GROUP (Admin, TechSupport, Coordinator) ---
 router.put('/:id', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'TechSupport'])) {
+        if (!userHasAnyRole(user, ['Admin', 'TechSupport', 'Coordinator'])) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 

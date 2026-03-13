@@ -113,17 +113,17 @@ router.post('/users', requireUserManager, async (req, res) => {
             }
         }
 
-        // Campus-scoped roles require a celebration_point
-        const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
-        if (needsCampus && !celebration_point) {
-            return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
-        }
-
         // Non-Admins: force their own campus
         const curIsCampusScoped = curRoles.some(r => ['TechSupport', 'Pastor', 'Coordinator'].includes(r))
         const finalCelebrationPoint = (!curIsAdmin && curIsCampusScoped)
             ? currentUser.celebration_point
             : (celebration_point || null)
+
+        // Campus-scoped roles require a celebration_point
+        const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
+        if (needsCampus && !finalCelebrationPoint) {
+            return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
+        }
 
         // Check if username exists
         const existing = await dbGet('SELECT id FROM users WHERE username = ?', [username])
@@ -213,9 +213,15 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
             }
         }
 
+        // Non-Admins: force their own campus scopes
+        const curIsCampusScoped = curRoles.some(r => ['TechSupport', 'Pastor', 'Coordinator'].includes(r))
+        const finalCelebrationPoint = (!curIsAdmin && curIsCampusScoped)
+            ? currentUser.celebration_point
+            : (celebration_point || null)
+        
         // Campus-scoped roles require a celebration_point
         const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
-        if (needsCampus && !celebration_point) {
+        if (needsCampus && !finalCelebrationPoint) {
             return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
         }
 
@@ -225,12 +231,12 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
             const hashedPassword = bcrypt.hashSync(password, 10)
             await dbRun(
                 'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [hashedPassword, name, primaryRole, rolesString, celebration_point || null, req.body.profile_image || null, id]
+                [hashedPassword, name, primaryRole, rolesString, finalCelebrationPoint, req.body.profile_image || null, id]
             )
         } else {
             await dbRun(
                 'UPDATE users SET name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [name, primaryRole, rolesString, celebration_point || null, req.body.profile_image || null, id]
+                [name, primaryRole, rolesString, finalCelebrationPoint, req.body.profile_image || null, id]
             )
         }
 

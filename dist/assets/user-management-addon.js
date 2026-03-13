@@ -15,6 +15,7 @@
   // ─── State ──────────────────────────────────────────────────
   let viewMode = localStorage.getItem('userViewMode') || 'grid';
   let searchQuery = '';
+  const userRolesMap = new Map();
 
   // ─── SVG Icons ──────────────────────────────────────────────
   const ICON_GRID = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -314,10 +315,31 @@
       const roleSpan = card.querySelector('.user-card-role');
       if (!roleSpan) return;
 
-      const currentRole = roleSpan.textContent.trim();
-      const roleLower = currentRole.toLowerCase().replace(/\s+/g, '');
-      roleSpan.className = 'um-role-badge ' + roleLower;
-      roleSpan.style.cssText = '';
+      const usernameNode = card.querySelector('.user-card-details div:first-child span');
+      const username = usernameNode ? usernameNode.textContent.trim() : null;
+
+      const roles = (username && userRolesMap.has(username))
+        ? userRolesMap.get(username)
+        : [roleSpan.textContent.trim()];
+
+      if (roles.length > 1) {
+        const container = document.createElement('div');
+        container.className = 'um-role-badges';
+        roles.forEach(r => {
+          const badge = document.createElement('span');
+          const roleLower = r.toLowerCase().replace(/\s+/g, '');
+          badge.className = 'um-role-badge ' + roleLower;
+          badge.textContent = r;
+          container.appendChild(badge);
+        });
+        roleSpan.replaceWith(container);
+      } else {
+        const currentRole = roles[0] || roleSpan.textContent.trim();
+        const roleLower = currentRole.toLowerCase().replace(/\s+/g, '');
+        roleSpan.className = 'um-role-badge ' + roleLower;
+        roleSpan.textContent = currentRole;
+        roleSpan.style.cssText = '';
+      }
 
       card.dataset.rolesEnhanced = 'true';
     });
@@ -354,12 +376,23 @@
       { value: 'Admin', label: 'Admin' }
     ];
 
-    const availableValues = options.map(o => o.value);
-    const rolesToShow = allRoles.filter(r => availableValues.includes(r.value));
+    // Find username field if editing
+    let currentUsername = null;
+    modal.querySelectorAll('.form-group').forEach(fg => {
+      const lbl = fg.querySelector('.form-label');
+      if (lbl && lbl.textContent.includes('Username')) {
+        const inp = fg.querySelector('input');
+        if (inp) currentUsername = inp.value;
+      }
+    });
+
+    const userRoles = (currentUsername && userRolesMap.has(currentUsername))
+      ? userRolesMap.get(currentUsername)
+      : [currentValue];
 
     rolesToShow.forEach(role => {
       const item = document.createElement('div');
-      const isChecked = currentValue === role.value;
+      const isChecked = userRoles.includes(role.value);
       item.className = 'um-role-checkbox-item' + (isChecked ? ' checked' : '');
       item.innerHTML = '<input type="checkbox" id="role-' + role.value + '" value="' + role.value + '"' + (isChecked ? ' checked' : '') + ' />' +
         '<label for="role-' + role.value + '">' + role.label + '</label>';
@@ -400,25 +433,50 @@
     return Array.from(picker.querySelectorAll('input:checked')).map(cb => cb.value);
   }
 
-  // ─── Intercept form submission to send roles array ─────────
-  function interceptFormSubmit() {
+  // ─── Intercept network requests (fetch) ─────────
+  function interceptNetwork() {
     const originalFetch = window.fetch;
-    window.fetch = function (url, options) {
-      if (typeof url === 'string' && url.includes('/api/admin/users') && options && options.body) {
-        try {
-          const body = JSON.parse(options.body);
-          const picker = qs('#um-role-picker');
-          if (picker) {
-            const checked = Array.from(picker.querySelectorAll('input:checked')).map(cb => cb.value);
-            if (checked.length > 0) {
-              body.roles = checked.join(',');
-              body.role = checked[0];
-              options.body = JSON.stringify(body);
+    window.fetch = async function (url, options) {
+      if (typeof url === 'string' && url.includes('/api/admin/users')) {
+        // Intercept POST/PUT (Save roles payload)
+        if (options && options.body) {
+          try {
+            const body = JSON.parse(options.body);
+            const picker = qs('#um-role-picker');
+            if (picker) {
+              const checked = Array.from(picker.querySelectorAll('input:checked')).map(cb => cb.value);
+              if (checked.length > 0) {
+                body.roles = checked.join(',');
+                body.role = checked[0];
+                options.body = JSON.stringify(body);
+              }
             }
-          }
+          } catch (_) {}
+        }
+      }
+
+      const response = await originalFetch.apply(this, arguments);
+
+      // Intercept GET (Cache user.roles data from backend)
+      if (typeof url === 'string' && url.includes('/api/admin/users') && (!options || options.method === 'GET')) {
+        try {
+          const clone = response.clone();
+          clone.json().then(data => {
+            if (data.success && data.users) {
+              data.users.forEach(u => {
+                userRolesMap.set(u.username, u.roles || [u.role]);
+              });
+              // Give the React DOM a moment to paint, then re-enhance badges
+              setTimeout(() => {
+                qsa('.user-card').forEach(c => c.removeAttribute('data-roles-enhanced'));
+                enhanceRoleBadges();
+              }, 150);
+            }
+          }).catch(e => console.error(e));
         } catch (_) {}
       }
-      return originalFetch.call(this, url, options);
+
+      return response;
     };
   }
 
@@ -441,7 +499,7 @@
   // ─── Init ──────────────────────────────────────────────────
   function init() {
     injectStyles();
-    interceptFormSubmit();
+    interceptNetwork();
 
     const observer = new MutationObserver(debounce(enhance, 100));
     observer.observe(document.body, { childList: true, subtree: true });

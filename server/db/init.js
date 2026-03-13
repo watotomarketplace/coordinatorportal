@@ -268,6 +268,25 @@ async function runMigrations() {
   // Backfill: copy single 'role' into 'roles' for any users that haven't been migrated
   try { await dbRun("UPDATE users SET roles = role WHERE roles IS NULL") } catch (_) {}
 
+  // ─── Data Migration: Fix legacy group naming anomalies (e.g. WON010 -> WON10, WON01 -> WON01) ───
+  try {
+    const anomalousGroups = await dbAll("SELECT id, group_code, name FROM formation_groups WHERE length(group_code) > 5 AND group_code LIKE '%0%'")
+    for (const g of anomalousGroups) {
+      const match = g.group_code.match(/^([a-zA-Z]{3})0(\d{2})$/)
+      if (match) {
+        const correctCode = `${match[1]}${match[2]}`
+        try {
+          await dbRun("UPDATE formation_groups SET group_code = ?, name = ? WHERE id = ?", [correctCode, correctCode, g.id])
+          console.log(`✅ Fixed legacy group naming: ${g.group_code} -> ${correctCode}`)
+        } catch (updateErr) {
+          console.warn(`⚠️ Could not automatically migrate ${g.group_code} to ${correctCode}: ${updateErr.message}`)
+        }
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ Failed to run anomalous group names migration:', err.message)
+  }
+
   // Check if admin exists
   const existingAdmin = await dbGet("SELECT id FROM users WHERE role = 'Admin'")
 

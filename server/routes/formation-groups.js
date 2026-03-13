@@ -21,7 +21,9 @@ async function generateGroupCode(celebrationPoint) {
         [celebrationPoint]
     )
     if (existing.length > 0) {
-        const lastNum = parseInt(existing[0].group_code.slice(-2), 10)
+        // Handle varying lengths robustly using regex to grab trailing digits
+        const match = existing[0].group_code.match(/\d+$/)
+        const lastNum = match ? parseInt(match[0], 10) : 0
         return `${prefix}${String(lastNum + 1).padStart(2, '0')}`
     }
     return `${prefix}01`
@@ -268,13 +270,17 @@ router.post('/:id/members', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
         }
 
-        // Check for duplicate
+        // Check for duplicate across ANY group
         const existing = await dbGet(
-            'SELECT id FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
-            [groupId, student_id]
+            'SELECT id, formation_group_id FROM formation_group_members WHERE student_id = ?',
+            [student_id]
         )
         if (existing) {
-            return res.status(409).json({ success: false, message: 'Student is already in this group' })
+            if (existing.formation_group_id === parseInt(groupId, 10)) {
+                return res.status(409).json({ success: false, message: 'Student is already in this group' })
+            } else {
+                return res.status(409).json({ success: false, message: 'Student is already assigned to another formation group' })
+            }
         }
 
         await dbRun(

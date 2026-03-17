@@ -221,6 +221,35 @@
 
       /* ─ Transition ─ */
       .admin-grid { transition: all 0.3s ease; }
+
+      /* ─ Bulk Import UI ─ */
+      .um-bulk-btn {
+        background: var(--glass-layer-2); border: var(--border-layer-2);
+        color: var(--text-primary); padding: 8px 16px; border-radius: 10px;
+        font-size: 13px; font-weight: 500; cursor: pointer; display: flex;
+        align-items: center; gap: 8px; transition: all 0.2s; box-shadow: var(--shadow-layer-2);
+      }
+      .um-bulk-btn:hover { background: var(--glass-layer-3); transform: translateY(-1px); }
+      
+      .um-bulk-modal .um-bulk-dropzone {
+        border: 2px dashed rgba(255,255,255,0.15); border-radius: 16px; padding: 40px 24px;
+        text-align: center; cursor: pointer; transition: all 0.2s;
+        background: rgba(255,255,255,0.02); margin: 24px 0;
+      }
+      .um-bulk-modal .um-bulk-dropzone:hover, .um-bulk-modal .um-bulk-dropzone.dragover {
+        border-color: rgba(74,158,255,0.5); background: rgba(74,158,255,0.05);
+      }
+      .um-bulk-preview-table {
+        width: 100%; border-collapse: collapse; font-size: 12px;
+        margin-top: 16px; background: var(--glass-layer-1); border-radius: 8px; overflow: hidden;
+      }
+      .um-bulk-preview-table th {
+        background: rgba(255,255,255,0.05); padding: 8px 12px; text-align: left;
+        color: var(--text-secondary); font-weight: 500; border-bottom: 1px solid rgba(255,255,255,0.05);
+      }
+      .um-bulk-preview-table td {
+        padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-primary);
+      }
     `;
     document.head.appendChild(style);
   }
@@ -255,7 +284,16 @@
     `;
     controls.appendChild(toggle);
 
-    header.insertBefore(controls, addBtn);
+    // Bulk Import Button
+    const bulkBtn = document.createElement('button');
+    bulkBtn.className = 'um-bulk-btn';
+    bulkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg> Bulk Import';
+    bulkBtn.onclick = openBulkImportModal;
+    
+    // Insert Bulk Import right before "+ Add New User"
+    header.insertBefore(bulkBtn, addBtn);
+    
+    header.insertBefore(controls, bulkBtn);
 
     // Event listeners
     const searchInput = controls.querySelector('#um-search-field');
@@ -520,6 +558,274 @@
       }
 
       return response;
+    };
+  }
+
+  // ─── Bulk Import Modal Logic ─────────────────────────────────
+  function openBulkImportModal() {
+    if (document.getElementById('um-bulk-modal-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'um-bulk-modal-overlay';
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:99999;backdrop-filter:blur(5px);';
+
+    let parsedUsers = [];
+
+    const modalHTML = `
+      <div class="glass-card modal um-bulk-modal" style="width:700px;max-width:95%;padding:0;display:flex;flex-direction:column;border-radius:20px;border:var(--border-layer-2);background:var(--glass-layer-4);backdrop-filter:var(--blur-layer-4);box-shadow:var(--shadow-layer-4);overflow:hidden;">
+        <!-- Header -->
+        <div style="height:44px;background:var(--glass-layer-3);border-bottom:var(--border-layer-1);display:flex;align-items:center;padding:0 16px;justify-content:space-between;">
+           <div style="display:flex;gap:8px;">
+             <button id="um-bulk-close-btn" style="width:12px;height:12px;border-radius:50%;background:#ff5f56;border:1px solid #e0443e;cursor:pointer;"></button>
+             <button style="width:12px;height:12px;border-radius:50%;background:#ffbd2e;border:1px solid #dea123;cursor:pointer;"></button>
+             <button style="width:12px;height:12px;border-radius:50%;background:#27c93f;border:1px solid #1aab29;cursor:pointer;"></button>
+           </div>
+           <div style="font-weight:500;color:var(--text-secondary);font-size:13px;">Bulk Import Users</div>
+           <div style="width:52px;"></div>
+        </div>
+        
+        <!-- Content -->
+        <div style="padding:32px;overflow-y:auto;max-height:70vh;" id="um-bulk-content">
+          <h2 style="margin:0 0 8px;font-size:20px;">Upload Users via CSV</h2>
+          <p style="margin:0 0 16px;color:var(--text-secondary);font-size:14px;line-height:1.5;">
+            Upload a CSV file containing multiple users to create them all at once. 
+            <a href="#" id="um-bulk-template-link" style="color:#56CCF2;text-decoration:none;">Download template CSV</a>
+          </p>
+
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-primary);background:var(--glass-layer-2);padding:10px 14px;border-radius:8px;border:var(--border-layer-1);margin-bottom:16px;cursor:pointer;">
+            <input type="checkbox" id="um-bulk-send-emails" style="accent-color:#56CCF2;" checked />
+            Send login credentials via email (requires valid <code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px;">email</code> column)
+          </label>
+
+          <input type="file" id="um-bulk-file-input" accept=".csv" style="display:none;" />
+          <div class="um-bulk-dropzone" id="um-bulk-dropzone">
+             <div style="font-size:40px;margin-bottom:16px;">📄</div>
+             <h3 style="margin:0 0 8px;font-size:16px;">Drag 'n' Drop CSV here</h3>
+             <p style="margin:0 0 16px;color:var(--text-secondary);font-size:13px;">or click to browse from your computer</p>
+             <button class="btn-secondary" id="um-bulk-browse-btn">Browse Files</button>
+          </div>
+
+          <div id="um-bulk-preview-container" style="display:none;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <h3 style="margin:0;font-size:16px;">Preview (<span id="um-bulk-count">0</span> users)</h3>
+              <button class="btn-secondary" id="um-bulk-clear-btn" style="padding:4px 12px;font-size:12px;">Clear</button>
+            </div>
+            <div style="max-height:250px;overflow-y:auto;border:var(--border-layer-1);border-radius:8px;">
+              <table class="um-bulk-preview-table" id="um-bulk-table">
+                <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Campus</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            
+            <div id="um-bulk-error-log" style="margin-top:16px;padding:12px;background:rgba(255,59,48,0.1);border:1px solid rgba(255,59,48,0.2);border-radius:8px;color:#ff453a;font-size:12px;display:none;"></div>
+            
+            <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:24px;">
+              <button class="btn-primary" id="um-bulk-submit-btn" style="width:100%;">Create Users</button>
+            </div>
+          </div>
+
+          <div id="um-bulk-results-container" style="display:none;text-align:center;padding:24px 0;">
+            <div style="font-size:48px;margin-bottom:16px;" id="um-bulk-result-icon">✅</div>
+            <h2 style="margin:0 0 8px;" id="um-bulk-result-title">Import Complete</h2>
+            <p style="color:var(--text-secondary);margin:0 0 24px;" id="um-bulk-result-desc"></p>
+            <button class="btn-primary" id="um-bulk-done-btn">Done</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    overlay.innerHTML = modalHTML;
+    document.body.appendChild(overlay);
+
+    const closeBtn = overlay.querySelector('#um-bulk-close-btn');
+    const doneBtn = overlay.querySelector('#um-bulk-done-btn');
+    const templateLink = overlay.querySelector('#um-bulk-template-link');
+    const fileInput = overlay.querySelector('#um-bulk-file-input');
+    const dropzone = overlay.querySelector('#um-bulk-dropzone');
+    const browseBtn = overlay.querySelector('#um-bulk-browse-btn');
+    const clearBtn = overlay.querySelector('#um-bulk-clear-btn');
+    const submitBtn = overlay.querySelector('#um-bulk-submit-btn');
+    const sendEmailsCheck = overlay.querySelector('#um-bulk-send-emails');
+
+    const previewContainer = overlay.querySelector('#um-bulk-preview-container');
+    const resultsContainer = overlay.querySelector('#um-bulk-results-container');
+    const errorLog = overlay.querySelector('#um-bulk-error-log');
+    const tbody = overlay.querySelector('#um-bulk-table tbody');
+
+    // Close Modal
+    const closeModal = () => { overlay.remove(); window.dispatchEvent(new Event('url-change')); };
+    closeBtn.onclick = closeModal;
+    doneBtn.onclick = () => { closeModal(); window.location.reload(); };
+    overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+
+    // File Dropzone Logic
+    browseBtn.onclick = () => fileInput.click();
+    dropzone.onclick = (e) => { if (e.target !== browseBtn) fileInput.click(); };
+    dropzone.ondragover = (e) => { e.preventDefault(); dropzone.classList.add('dragover'); };
+    dropzone.ondragleave = (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); };
+    dropzone.ondrop = (e) => {
+      e.preventDefault(); dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    };
+    fileInput.onchange = (e) => { if (e.target.files.length) handleFile(e.target.files[0]); };
+
+    // Download Template
+    templateLink.onclick = (e) => {
+      e.preventDefault();
+      const csv = 'name,username,email,password,role,celebration_point\\nJohn Doe,johndoe,john@example.com,Password123!,Facilitator,Downtown';
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'user_import_template.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    clearBtn.onclick = () => {
+      parsedUsers = []; fileInput.value = '';
+      dropzone.style.display = 'block';
+      previewContainer.style.display = 'none';
+      errorLog.style.display = 'none';
+    };
+
+    function handleFile(file) {
+      if (!file.name.endsWith('.csv')) { alert('Please upload a valid CSV file.'); return; }
+      const reader = new FileReader();
+      reader.onload = (e) => parseCSV(e.target.result);
+      reader.readAsText(file);
+    }
+
+    // Basic CSV Parser
+    function parseCSV(text) {
+      errorLog.style.display = 'none';
+      errorLog.innerHTML = '';
+      
+      const lines = text.split(/\r\n|\n|\r/).filter(line => line.trim());
+      if (lines.length < 2) { alert('CSV must contain a header row and data rows.'); return; }
+
+      
+      // Parse CSV line accounting for quotes
+      const parseLine = (line) => {
+        const result = [];
+        let curr = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (inQuotes && line[i+1] === '"') { curr += '"'; i++; } else { inQuotes = !inQuotes; }
+          } else if (char === ',' && !inQuotes) {
+            result.push(curr.trim()); curr = '';
+          } else { curr += char; }
+        }
+        result.push(curr.trim());
+        return result;
+      };
+
+      const headers = parseLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z_]/g, ''));
+      
+      // Map common deviations to standard keys
+      const keyMap = {
+        'fullname': 'name', 'first_name': 'name', 'firstname': 'name',
+        'celebrationpoint': 'celebration_point', 'campus': 'celebration_point', 'location': 'celebration_point',
+        'roles': 'role'
+      };
+
+      const standardizedHeaders = headers.map(h => keyMap[h] || h);
+
+      parsedUsers = lines.slice(1).map(line => {
+        const cols = parseLine(line);
+        const user = {};
+        standardizedHeaders.forEach((header, idx) => {
+           if (cols[idx] !== undefined) user[header] = cols[idx];
+        });
+        return user;
+      }).filter(u => u.username || u.name);
+
+      if (parsedUsers.length === 0) { alert('No valid rows found in CSV.'); return; }
+
+      // Validate basics locally before submisison
+      let localErrors = [];
+      parsedUsers.forEach((u, i) => {
+         if (!u.username) localErrors.push(`Row ${i+2}: Missing username`);
+         if (!u.name) localErrors.push(`Row ${i+2}: Missing name`);
+         if (!u.password) localErrors.push(`Row ${i+2}: Missing password`);
+         if (!u.role) localErrors.push(`Row ${i+2}: Missing role`);
+      });
+
+      if (localErrors.length > 0) {
+         errorLog.innerHTML = '<strong>Validation Errors:</strong><ul style="margin:4px 0 0;padding-left:20px;">' + localErrors.slice(0, 5).map(e => '<li>'+e+'</li>').join('') + (localErrors.length > 5 ? `<li>...and ${localErrors.length-5} more</li>` : '') + '</ul>';
+         errorLog.style.display = 'block';
+         submitBtn.disabled = true;
+         submitBtn.style.opacity = '0.5';
+      } else {
+         submitBtn.disabled = false;
+         submitBtn.style.opacity = '1';
+      }
+
+      // Render Table
+      tbody.innerHTML = parsedUsers.map(u => `
+        <tr>
+          <td>${u.name || '-'}</td>
+          <td>${(u.username || '-').toLowerCase()}</td>
+          <td>${u.email || '-'}</td>
+          <td><span class="um-role-badge ${(u.role||'').toLowerCase()}">${u.role || '-'}</span></td>
+          <td>${u.celebration_point || '-'}</td>
+        </tr>
+      `).join('');
+
+      overlay.querySelector('#um-bulk-count').textContent = parsedUsers.length;
+      dropzone.style.display = 'none';
+      previewContainer.style.display = 'block';
+    }
+
+    // Submission
+    submitBtn.onclick = async () => {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px;"></div> Importing...';
+      
+      try {
+        const sendEmails = sendEmailsCheck.checked;
+        const resp = await fetch('/api/admin/users/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ users: parsedUsers, sendEmails })
+        });
+        
+        const data = await resp.json();
+        
+        previewContainer.style.display = 'none';
+        resultsContainer.style.display = 'block';
+        
+        if (data.success) {
+           const sum = data.summary;
+           overlay.querySelector('#um-bulk-result-icon').textContent = sum.failed === 0 ? '✅' : '⚠️';
+           overlay.querySelector('#um-bulk-result-title').textContent = sum.failed === 0 ? 'Import Successful' : 'Completed with Errors';
+           
+           let descHtml = `Successfully created <strong>${sum.created}</strong> users.`;
+           if (sum.skipped > 0) descHtml += ` Skipped <strong>${sum.skipped}</strong> duplicates.`;
+           if (sum.failed > 0) descHtml += ` <br/><span style="color:#ff453a;">Failed to create ${sum.failed} users.</span>`;
+           
+           if (sendEmails) {
+              if (data.emailConfigured) {
+                 descHtml += `<br/><br/>📨 Sent credentials to ${sum.emailed} email addresses.`;
+              } else {
+                 descHtml += `<br/><br/>⚠️ Emails were not sent because SMTP is not configured on the server.`;
+              }
+           }
+           
+           overlay.querySelector('#um-bulk-result-desc').innerHTML = descHtml;
+        } else {
+           overlay.querySelector('#um-bulk-result-icon').textContent = '❌';
+           overlay.querySelector('#um-bulk-result-title').textContent = 'Import Failed';
+           overlay.querySelector('#um-bulk-result-desc').textContent = data.message || 'An unknown error occurred.';
+        }
+      } catch (err) {
+        alert('Server error: ' + err.message);
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Users';
+      }
     };
   }
 

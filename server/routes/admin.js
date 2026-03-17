@@ -5,6 +5,7 @@ import { readdirSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { requireAdminOrLeadership } from '../middleware/rbac.js'
+import { sendLoginEmail, isEmailConfigured } from '../services/email.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -164,6 +165,141 @@ router.post('/users', requireUserManager, async (req, res) => {
     } catch (error) {
         console.error('Create user error:', error)
         res.json({ success: false, message: 'Failed to create user' })
+    }
+})
+
+// ─── Bulk Create Users ───────────────────────────────────────
+// Helper: pick a random profile image from the Profile Images directory
+function pickRandomProfileImage() {
+    try {
+        const categories = readdirSync(imagesDir).filter(f => statSync(join(imagesDir, f)).isDirectory())
+        if (categories.length === 0) return null
+        const cat = categories[Math.floor(Math.random() * categories.length)]
+        const catPath = join(imagesDir, cat)
+        const files = readdirSync(catPath).filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+        if (files.length === 0) return null
+        const file = files[Math.floor(Math.random() * files.length)]
+        return `/profile-images/${encodeURIComponent(cat)}/${encodeURIComponent(file)}`
+    } catch { return null }
+}
+
+router.post('/users/bulk', requireUserManager, async (req, res) => {
+    try {
+        const currentUser = req.session.user
+        const { users, sendEmails } = req.body
+
+        if (!Array.isArray(users) || users.length === 0) {
+            return res.json({ success: false, message: 'No users provided' })
+        }
+        if (users.length > 200) {
+            return res.json({ success: false, message: 'Maximum 200 users per batch' })
+        }
+
+        // Permissions of the current user
+        const curRoles = parseRoles(currentUser.roles || currentUser.role)
+        const curIsAdmin = curRoles.includes('Admin')
+        const curIsPastor = curRoles.includes('Pastor')
+        const curIsCoordOrTech = curRoles.some(r => ['TechSupport', 'Coordinator'].includes(r))
+        const curIsCampusScoped = curRoles.some(r => ['TechSupport', 'Pastor', 'Coordinator'].includes(r))
+
+        const results = []
+        let created = 0, skipped = 0, failed = 0, emailed = 0
+
+        for (const u of users) {
+            const username = (u.username || '').toLowerCase().trim()
+            const name = (u.name || '').trim()
+            const password = (u.password || '').trim()
+            const email = (u.email || '').trim()
+            const rolesList = parseRoles(u.role || u.roles)
+            const primaryRole = rolesList[0]
+
+            // Validate required fields
+            if (!username || !password || !name || rolesList.length === 0) {
+                results.push({ username: username || '(empty)', status: 'failed', error: 'Missing required fields (name, username, password, role)' })
+                failed++
+                continue
+            }
+
+            // Validate roles
+            const invalidRole = rolesList.find(r => !ALL_VALID_ROLES.includes(r))
+            if (invalidRole) {
+                results.push({ username, status: 'failed', error: `Invalid role: ${invalidRole}` })
+                failed++
+                continue
+            }
+
+            // Permission checks
+            if (!curIsAdmin) {
+                if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator')) {
+                    results.push({ username, status: 'failed', error: 'You can only create Facilitator accounts' })
+                    failed++
+                    continue
+                }
+                if (curIsPastor && !rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
+                    results.push({ username, status: 'failed', error: 'Can only create Coordinator/Facilitator accounts' })
+                    failed++
+                    continue
+                }
+            }
+
+            // Campus scoping
+            const celebrationPoint = (!curIsAdmin && curIsCampusScoped)
+                ? currentUser.celebration_point
+                : (u.celebration_point || '').trim() || null
+            const needsCampus = rolesList.some(r => CAMPUS_SCOPED_ROLES.includes(r))
+            if (needsCampus && !celebrationPoint) {
+                results.push({ username, status: 'failed', error: 'Campus-scoped role requires celebration_point' })
+                failed++
+                continue
+            }
+
+            // Check duplicate
+            const existing = await dbGet('SELECT id FROM users WHERE LOWER(username) = ?', [username])
+            if (existing) {
+                results.push({ username, status: 'skipped', error: 'Username already exists' })
+                skipped++
+                continue
+            }
+
+            // Create the user
+            try {
+                const hashedPassword = bcrypt.hashSync(password, 10)
+                const rolesString = rolesList.join(',')
+                const profileImage = pickRandomProfileImage()
+
+                await dbRun(
+                    'INSERT INTO users (username, password, name, role, roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+                    [username, hashedPassword, name, primaryRole, rolesString, celebrationPoint, profileImage]
+                )
+
+                let emailResult = null
+                if (sendEmails && email) {
+                    emailResult = await sendLoginEmail({
+                        email, name, username, password, role: primaryRole, celebrationPoint
+                    })
+                    if (emailResult.sent) emailed++
+                }
+
+                results.push({
+                    username, status: 'created', role: primaryRole,
+                    emailSent: emailResult ? emailResult.sent : false
+                })
+                created++
+            } catch (err) {
+                results.push({ username, status: 'failed', error: err.message })
+                failed++
+            }
+        }
+
+        res.json({
+            success: true,
+            summary: { total: users.length, created, skipped, failed, emailed },
+            emailConfigured: isEmailConfigured(),
+            results
+        })
+    } catch (error) {
+        console.error('Bulk create error:', error)
+        res.json({ success: false, message: 'Bulk creation failed: ' + error.message })
     }
 })
 

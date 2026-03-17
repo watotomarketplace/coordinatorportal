@@ -81,7 +81,9 @@ router.get('/users', requireUserManager, async (req, res) => {
 router.post('/users', requireUserManager, async (req, res) => {
     try {
         const currentUser = req.session.user
-        const { username, password, name, celebration_point } = req.body
+        const { password, name, celebration_point } = req.body
+        // Normalize username to lowercase
+        const username = (req.body.username || '').toLowerCase().trim()
         // Support both single role and roles array/string
         const rolesInput = req.body.roles || req.body.role
         const rolesList = parseRoles(rolesInput)
@@ -125,8 +127,8 @@ router.post('/users', requireUserManager, async (req, res) => {
             return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
         }
 
-        // Check if username exists
-        const existing = await dbGet('SELECT id FROM users WHERE username = ?', [username])
+        // Check if username exists (case-insensitive)
+        const existing = await dbGet('SELECT id FROM users WHERE LOWER(username) = ?', [username])
         if (existing) {
             return res.json({ success: false, message: 'Username already exists' })
         }

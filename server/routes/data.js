@@ -4,6 +4,7 @@ import { getNotes, addNote, getGroupNotes, addGroupNote } from '../services/note
 import { getStudentTags, getAllTags, addTag, removeTag, removeTagByName, TAG_COLORS } from '../services/tags.js'
 import { logAudit } from '../services/audit.js'
 import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
+import { dbAll } from '../db/init.js'
 
 const router = express.Router()
 
@@ -20,10 +21,32 @@ const ROLE_NOTE_TYPE_MAP = {
 // Get student data
 router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     try {
+        const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
 
         const result = await getStudentData(celebrationPoint)
-        const students = result.students || []
+        let students = result.students || []
+
+        // Facilitators: filter to only students in their assigned groups
+        if (user.role === 'Facilitator') {
+            const members = await dbAll(`
+                SELECT fgm.student_id, fgm.student_name, fgm.student_email
+                FROM formation_group_members fgm
+                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
+                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
+            `, [user.id, user.id])
+
+            const memberIds = new Set(members.map(m => String(m.student_id)))
+            const memberEmails = new Set(members.filter(m => m.student_email).map(m => m.student_email.toLowerCase()))
+
+            students = students.filter(s => {
+                // Match by student_id or by email
+                if (s.id && memberIds.has(String(s.id))) return true
+                if (s.email && memberEmails.has(s.email.toLowerCase())) return true
+                return false
+            })
+        }
+
         const stats = getStats(students)
         const chartData = getChartData(students)
 

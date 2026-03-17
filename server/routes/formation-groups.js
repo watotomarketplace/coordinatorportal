@@ -50,36 +50,39 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
 
         let groups = []
         if (user.role === 'Facilitator') {
-            // Facilitators see only their assigned groups
+            // Facilitators see groups where they are main facilitator OR co-facilitator
             groups = await dbAll(`
-                SELECT fg.*, u.name as facilitator_name,
+                SELECT fg.*, u.name as facilitator_name, u2.name as co_facilitator_name,
                     (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
                     ${overdueCheck}
                 FROM formation_groups fg
                 LEFT JOIN users u ON fg.facilitator_user_id = u.id
-                WHERE fg.facilitator_user_id = ? AND fg.active = 1
+                LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
+                WHERE (fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?) AND fg.active = 1
                 ORDER BY fg.group_code
-            `, [user.id])
+            `, [user.id, user.id])
         } else if (GLOBAL_ROLES.includes(user.role)) {
             // Admin, LeadershipTeam see all groups (optionally filtered by campus)
             const campus = req.scopedCelebrationPoint
             if (campus) {
                 groups = await dbAll(`
-                    SELECT fg.*, u.name as facilitator_name,
+                    SELECT fg.*, u.name as facilitator_name, u2.name as co_facilitator_name,
                         (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
                         ${overdueCheck}
                     FROM formation_groups fg
                     LEFT JOIN users u ON fg.facilitator_user_id = u.id
+                    LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
                     WHERE fg.celebration_point = ? AND fg.active = 1
                     ORDER BY fg.group_code
                 `, [campus])
             } else {
                 groups = await dbAll(`
-                    SELECT fg.*, u.name as facilitator_name,
+                    SELECT fg.*, u.name as facilitator_name, u2.name as co_facilitator_name,
                         (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
                         ${overdueCheck}
                     FROM formation_groups fg
                     LEFT JOIN users u ON fg.facilitator_user_id = u.id
+                    LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
                     WHERE fg.active = 1
                     ORDER BY fg.group_code
                 `)
@@ -87,11 +90,12 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         } else {
             // Campus-scoped roles (Pastor, Coordinator, TechSupport)
             groups = await dbAll(`
-                SELECT fg.*, u.name as facilitator_name,
+                SELECT fg.*, u.name as facilitator_name, u2.name as co_facilitator_name,
                     (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
                     ${overdueCheck}
                 FROM formation_groups fg
                 LEFT JOIN users u ON fg.facilitator_user_id = u.id
+                LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
                 WHERE fg.celebration_point = ? AND fg.active = 1
                 ORDER BY fg.group_code
             `, [req.scopedCelebrationPoint])
@@ -114,9 +118,11 @@ router.get('/:id', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
         const group = await dbGet(`
-            SELECT fg.*, u.name as facilitator_name, u.username as facilitator_username
+            SELECT fg.*, u.name as facilitator_name, u.username as facilitator_username,
+                   u2.name as co_facilitator_name, u2.username as co_facilitator_username
             FROM formation_groups fg
             LEFT JOIN users u ON fg.facilitator_user_id = u.id
+            LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
             WHERE fg.id = ?
         `, [req.params.id])
 
@@ -124,8 +130,8 @@ router.get('/:id', requireAuth, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
 
-        // Access check
-        if (user.role === 'Facilitator' && group.facilitator_user_id !== user.id) {
+        // Access check — facilitators can access if they are main OR co-facilitator
+        if (user.role === 'Facilitator' && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
         if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator') {
@@ -168,7 +174,7 @@ router.post('/', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
-        const { name, celebration_point, facilitator_user_id, cohort, group_code } = req.body
+        const { name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, group_code } = req.body
 
         if (!name || !celebration_point) {
             return res.status(400).json({ success: false, message: 'Name and Celebration Point are required' })
@@ -182,6 +188,16 @@ router.post('/', requireAuth, async (req, res) => {
         // Use provided group_code or auto-generate
         const code = group_code || await generateGroupCode(celebration_point)
 
+        // Validate group_code format: must be 3 uppercase letters + exactly 2 digits
+        if (!/^[A-Z]{3}\d{2}$/.test(code)) {
+            return res.status(400).json({ success: false, message: 'Group code must be 3 letters + 2 digits (e.g. WDT01)' })
+        }
+
+        // Validate co-facilitator is different from main facilitator
+        if (co_facilitator_user_id && facilitator_user_id && co_facilitator_user_id === facilitator_user_id) {
+            return res.status(400).json({ success: false, message: 'Co-facilitator must be different from the main facilitator' })
+        }
+
         // Check uniqueness
         const existing = await dbGet('SELECT id FROM formation_groups WHERE group_code = ?', [code])
         if (existing) {
@@ -189,8 +205,8 @@ router.post('/', requireAuth, async (req, res) => {
         }
 
         const result = await dbRun(
-            'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, cohort) VALUES (?, ?, ?, ?, ?)',
-            [code, name, celebration_point, facilitator_user_id || null, cohort || '2025']
+            'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort) VALUES (?, ?, ?, ?, ?, ?)',
+            [code, name, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort || '2025']
         )
 
         res.json({ success: true, groupId: result.lastInsertRowid, group_code: code })
@@ -208,7 +224,7 @@ router.put('/:id', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
-        const { name, celebration_point, facilitator_user_id, cohort, active } = req.body
+        const { name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
         const { id } = req.params
 
         const group = await dbGet('SELECT id, celebration_point FROM formation_groups WHERE id = ?', [id])
@@ -221,11 +237,19 @@ router.put('/:id', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
         }
 
+        // Validate co-facilitator is different from main facilitator
+        const finalFacilitator = facilitator_user_id !== undefined ? facilitator_user_id : null
+        const finalCoFacilitator = co_facilitator_user_id !== undefined ? co_facilitator_user_id : null
+        if (finalFacilitator && finalCoFacilitator && finalFacilitator === finalCoFacilitator) {
+            return res.status(400).json({ success: false, message: 'Co-facilitator must be different from the main facilitator' })
+        }
+
         await dbRun(
             `UPDATE formation_groups 
              SET name = COALESCE(?, name), 
                  celebration_point = COALESCE(?, celebration_point),
                  facilitator_user_id = COALESCE(?, facilitator_user_id),
+                 co_facilitator_user_id = ?,
                  cohort = COALESCE(?, cohort),
                  active = COALESCE(?, active)
              WHERE id = ?`,
@@ -233,6 +257,7 @@ router.put('/:id', requireAuth, async (req, res) => {
                 name !== undefined ? name : null,
                 celebration_point !== undefined ? celebration_point : null,
                 facilitator_user_id !== undefined ? facilitator_user_id : null,
+                co_facilitator_user_id !== undefined ? co_facilitator_user_id : null,
                 cohort !== undefined ? cohort : null,
                 active !== undefined ? active : null,
                 id

@@ -268,23 +268,38 @@ async function runMigrations() {
   // Backfill: copy single 'role' into 'roles' for any users that haven't been migrated
   try { await dbRun("UPDATE users SET roles = role WHERE roles IS NULL") } catch (_) {}
 
-  // ─── Data Migration: Fix legacy group naming anomalies (e.g. WON010 -> WON10, WON01 -> WON01) ───
+  // ─── Co-Facilitator: add second facilitator column to formation_groups ───
+  try { await dbRun('ALTER TABLE formation_groups ADD COLUMN co_facilitator_user_id INTEGER') } catch (_) {}
+
+  // ─── Data Migration: Fix group codes to always be XXX## (3 letters + exactly 2 digits) ───
   try {
-    const anomalousGroups = await dbAll("SELECT id, group_code, name FROM formation_groups WHERE length(group_code) > 5 AND group_code LIKE '%0%'")
-    for (const g of anomalousGroups) {
-      const match = g.group_code.match(/^([a-zA-Z]{3})0(\d{2})$/)
-      if (match) {
-        const correctCode = `${match[1]}${match[2]}`
-        try {
-          await dbRun("UPDATE formation_groups SET group_code = ?, name = ? WHERE id = ?", [correctCode, correctCode, g.id])
-          console.log(`✅ Fixed legacy group naming: ${g.group_code} -> ${correctCode}`)
-        } catch (updateErr) {
-          console.warn(`⚠️ Could not automatically migrate ${g.group_code} to ${correctCode}: ${updateErr.message}`)
+    const allGroups = await dbAll("SELECT id, group_code, name FROM formation_groups")
+    for (const g of allGroups) {
+      // Match codes that DON'T follow the XXX## pattern (e.g. WON010, WDT1, WDTA01, etc.)
+      const valid = /^[A-Z]{3}\d{2}$/.test(g.group_code)
+      if (!valid) {
+        const match = g.group_code.match(/^([A-Za-z]{3})(\d+)$/)
+        if (match) {
+          const prefix = match[1].toUpperCase()
+          const num = parseInt(match[2], 10)
+          const correctCode = `${prefix}${String(num).padStart(2, '0').slice(-2)}`
+          try {
+            // Only update if the corrected code doesn't already exist
+            const conflict = await dbGet('SELECT id FROM formation_groups WHERE group_code = ? AND id != ?', [correctCode, g.id])
+            if (!conflict) {
+              await dbRun("UPDATE formation_groups SET group_code = ?, name = ? WHERE id = ?", [correctCode, correctCode, g.id])
+              console.log(`✅ Fixed group code: ${g.group_code} -> ${correctCode}`)
+            } else {
+              console.warn(`⚠️ Cannot fix ${g.group_code} -> ${correctCode}: conflict with existing group`)
+            }
+          } catch (updateErr) {
+            console.warn(`⚠️ Could not fix ${g.group_code}: ${updateErr.message}`)
+          }
         }
       }
     }
   } catch (err) {
-    console.error('⚠️ Failed to run anomalous group names migration:', err.message)
+    console.error('⚠️ Failed to run group code normalization migration:', err.message)
   }
 
   // Check if admin exists

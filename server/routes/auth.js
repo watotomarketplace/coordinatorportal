@@ -7,13 +7,14 @@ const router = express.Router()
 // Login
 router.post('/login', async (req, res) => {
     try {
-        const { username, password } = req.body
+        const { password } = req.body
+        const username = (req.body.username || '').toLowerCase().trim()
 
         if (!username || !password) {
             return res.json({ success: false, message: 'Username and password required' })
         }
 
-        const user = await dbGet('SELECT * FROM users WHERE username = ? AND active = 1', [username])
+        const user = await dbGet('SELECT * FROM users WHERE LOWER(username) = ? AND active = 1', [username])
 
         if (!user) {
             return res.json({ success: false, message: 'Invalid credentials' })

@@ -21,9 +21,9 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         const campusParam = (isGlobal && !req.query.celebration_point)
             ? [] : [campus]
 
-        // Facilitator filter
-        const facilFilter = user.role === 'Facilitator' ? 'AND fg.facilitator_user_id = ?' : ''
-        const facilParam = user.role === 'Facilitator' ? [user.id] : []
+        // Facilitator filter (includes co-facilitator)
+        const facilFilter = user.role === 'Facilitator' ? 'AND (fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?)' : ''
+        const facilParam = user.role === 'Facilitator' ? [user.id, user.id] : []
 
         const params = [...campusParam, ...facilParam]
 

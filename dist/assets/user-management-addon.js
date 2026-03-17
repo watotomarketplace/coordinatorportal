@@ -155,21 +155,63 @@
       .um-role-badge.leadershipteam { background: rgba(255,214,10,0.15); color: #ffd60a; border-color: rgba(255,214,10,0.3); }
       .um-role-badge.facilitator { background: rgba(48,209,88,0.15); color: #30d158; border-color: rgba(48,209,88,0.3); }
 
-      /* ─ Multi-Role Checkboxes ─ */
-      .um-role-checkboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      /* ─ Multi-Role Checkboxes (Compact Premium Grid) ─ */
+      .um-role-checkboxes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
       .um-role-checkbox-item {
-        display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-        border-radius: 8px; background: var(--glass-layer-1); border: var(--border-layer-2);
-        cursor: pointer; transition: all 0.2s; user-select: none;
+        display: flex; align-items: center; gap: 6px; padding: 7px 8px;
+        border-radius: 10px; background: var(--glass-layer-1);
+        border: 1.5px solid rgba(255,255,255,0.06);
+        cursor: pointer; transition: all 0.25s cubic-bezier(.22, 1, .36, 1);
+        user-select: none; position: relative; overflow: hidden;
+        min-width: 0;
       }
-      .um-role-checkbox-item:hover { background: var(--glass-layer-2); }
+      .um-role-checkbox-item::before {
+        content: ''; position: absolute; inset: 0; opacity: 0;
+        transition: opacity 0.25s; border-radius: 10px; pointer-events: none;
+      }
+      .um-role-checkbox-item:hover { background: var(--glass-layer-2); transform: translateY(-1px); }
+      .um-role-checkbox-item:active { transform: scale(0.97); }
       .um-role-checkbox-item.checked {
-        background: rgba(74,158,255,0.1); border-color: rgba(74,158,255,0.3);
+        border-color: rgba(74,158,255,0.4);
+        box-shadow: 0 0 0 1px rgba(74,158,255,0.1), 0 2px 6px rgba(74,158,255,0.06);
       }
+      .um-role-checkbox-item.checked::before { opacity: 1; }
+      /* Role-specific accent colors when checked */
+      .um-role-checkbox-item.checked[data-role="Coordinator"] { border-color: rgba(102,126,234,0.5); }
+      .um-role-checkbox-item.checked[data-role="Coordinator"]::before { background: rgba(102,126,234,0.10); }
+      .um-role-checkbox-item.checked[data-role="TechSupport"] { border-color: rgba(0,122,255,0.5); }
+      .um-role-checkbox-item.checked[data-role="TechSupport"]::before { background: rgba(0,122,255,0.10); }
+      .um-role-checkbox-item.checked[data-role="Pastor"] { border-color: rgba(191,90,242,0.5); }
+      .um-role-checkbox-item.checked[data-role="Pastor"]::before { background: rgba(191,90,242,0.10); }
+      .um-role-checkbox-item.checked[data-role="Facilitator"] { border-color: rgba(48,209,88,0.5); }
+      .um-role-checkbox-item.checked[data-role="Facilitator"]::before { background: rgba(48,209,88,0.10); }
+      .um-role-checkbox-item.checked[data-role="LeadershipTeam"] { border-color: rgba(255,214,10,0.5); }
+      .um-role-checkbox-item.checked[data-role="LeadershipTeam"]::before { background: rgba(255,214,10,0.10); }
+      .um-role-checkbox-item.checked[data-role="Admin"] { border-color: rgba(255,69,58,0.5); }
+      .um-role-checkbox-item.checked[data-role="Admin"]::before { background: rgba(255,69,58,0.10); }
       .um-role-checkbox-item input[type="checkbox"] {
-        accent-color: #4A9EFF; width: 16px; height: 16px; cursor: pointer;
+        appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
+        border-radius: 5px; border: 1.5px solid rgba(255,255,255,0.15);
+        background: var(--glass-layer-2); cursor: pointer;
+        position: relative; flex-shrink: 0;
+        transition: all 0.2s cubic-bezier(.22, 1, .36, 1);
       }
-      .um-role-checkbox-item label { font-size: 13px; color: var(--text-primary); cursor: pointer; }
+      .um-role-checkbox-item input[type="checkbox"]:checked {
+        background: linear-gradient(135deg, #4A9EFF 0%, #667eea 100%);
+        border-color: transparent;
+        box-shadow: 0 2px 4px rgba(74,158,255,0.25);
+      }
+      .um-role-checkbox-item input[type="checkbox"]:checked::after {
+        content: '✓'; position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: white; font-size: 10px; font-weight: 700;
+      }
+      .um-role-checkbox-item label {
+        font-size: 11px; color: var(--text-primary); cursor: pointer;
+        font-weight: 500; position: relative; z-index: 1;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        min-width: 0;
+      }
 
       /* ─ Result Count ─ */
       .um-result-count {
@@ -390,10 +432,11 @@
       ? userRolesMap.get(currentUsername)
       : [currentValue];
 
-    rolesToShow.forEach(role => {
+    allRoles.forEach(role => {
       const item = document.createElement('div');
       const isChecked = userRoles.includes(role.value);
       item.className = 'um-role-checkbox-item' + (isChecked ? ' checked' : '');
+      item.setAttribute('data-role', role.value);
       item.innerHTML = '<input type="checkbox" id="role-' + role.value + '" value="' + role.value + '"' + (isChecked ? ' checked' : '') + ' />' +
         '<label for="role-' + role.value + '">' + role.label + '</label>';
 

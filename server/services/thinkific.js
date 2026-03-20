@@ -259,6 +259,8 @@ export async function getPaginatedUsers({ page = 1, limit = 50, type = 'enrolled
         const q = search.toLowerCase()
         data = data.filter(u =>
             (u.name && u.name.toLowerCase().includes(q)) ||
+            (u.first_name && u.first_name.toLowerCase().includes(q)) ||
+            (u.last_name && u.last_name.toLowerCase().includes(q)) ||
             (u.email && u.email.toLowerCase().includes(q)) ||
             (u.course && u.course.toLowerCase().includes(q))
         )
@@ -421,6 +423,8 @@ async function doRefresh(fullSync = false) {
             users.forEach(user => {
                 fetchedUserMap[user.id] = {
                     userId: user.id,
+                    first_name: user.first_name || '',
+                    last_name: user.last_name || '',
                     name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
                     email: user.email,
                     celebration_point: normalizeCelebrationPoint(user.company || ''),
@@ -441,6 +445,8 @@ async function doRefresh(fullSync = false) {
                     if (existingS) {
                         user = {
                             userId: existingS.userId,
+                            first_name: existingS.first_name || '',
+                            last_name: existingS.last_name || '',
                             name: existingS.name,
                             email: existingS.email,
                             celebration_point: existingS.celebration_point,
@@ -452,6 +458,8 @@ async function doRefresh(fullSync = false) {
                         const existingU = mergedUnenrolled.find(u => u.userId == enrollment.user_id)
                         if (existingU) user = {
                             userId: existingU.userId,
+                            first_name: existingU.first_name || '',
+                            last_name: existingU.last_name || '',
                             name: existingU.name,
                             email: existingU.email,
                             celebration_point: existingU.celebration_point
@@ -470,6 +478,8 @@ async function doRefresh(fullSync = false) {
                         const uData = userRes.data
                         user = {
                             userId: uData.id,
+                            first_name: uData.first_name || '',
+                            last_name: uData.last_name || '',
                             name: `${uData.first_name || ''} ${uData.last_name || ''}`.trim(),
                             email: uData.email,
                             celebration_point: normalizeCelebrationPoint(uData.company || ''),
@@ -502,6 +512,7 @@ async function doRefresh(fullSync = false) {
 
                 const studentRecord = {
                     id: enrollment.id, userId: user.userId,
+                    first_name: user.first_name, last_name: user.last_name,
                     name: user.name, email: user.email,
                     course: enrollment.course_name,
                     progress: progressPercent, status,
@@ -546,6 +557,8 @@ async function doRefresh(fullSync = false) {
                     if (studentIdx !== -1) {
                         mergedStudents[studentIdx] = {
                             ...mergedStudents[studentIdx],
+                            first_name: user.first_name,
+                            last_name: user.last_name,
                             name: user.name,
                             email: user.email,
                             celebration_point: user.celebration_point
@@ -558,6 +571,8 @@ async function doRefresh(fullSync = false) {
 
                     const record = {
                         userId: user.userId,
+                        first_name: user.first_name,
+                        last_name: user.last_name,
                         name: user.name,
                         email: user.email,
                         celebration_point: user.celebration_point,

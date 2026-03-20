@@ -1,6 +1,7 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
-import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
+import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole, userHasRole } from '../middleware/rbac.js'
+import { getGroupNotes, addGroupNote } from '../services/notes.js'
 
 const router = express.Router()
 
@@ -16,17 +17,18 @@ const CAMPUS_CODES = {
 // Generate next group code for a campus (e.g. WDT01, WDT02, ...)
 async function generateGroupCode(celebrationPoint) {
     const prefix = CAMPUS_CODES[celebrationPoint] || 'WXX'
-    const existing = await dbAll(
-        'SELECT group_code FROM formation_groups WHERE celebration_point = ? ORDER BY group_code DESC LIMIT 1',
+    const allCodes = await dbAll(
+        'SELECT group_code FROM formation_groups WHERE celebration_point = ?',
         [celebrationPoint]
     )
-    if (existing.length > 0) {
-        // Handle varying lengths robustly using regex to grab trailing digits
-        const match = existing[0].group_code.match(/\d+$/)
-        const lastNum = match ? parseInt(match[0], 10) : 0
-        return `${prefix}${String(lastNum + 1).padStart(2, '0')}`
-    }
-    return `${prefix}01`
+    const nums = allCodes
+        .map(r => {
+            const match = r.group_code.match(/(\d+)$/)
+            return match ? parseInt(match[1], 10) : 0
+        })
+        .filter(n => !isNaN(n))
+    const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1
+    return `${prefix}${String(nextNum).padStart(2, '0')}`
 }
 
 // --- LIST GROUPS ---
@@ -49,7 +51,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         ` : ', 0 as is_overdue'
 
         let groups = []
-        if (user.role === 'Facilitator') {
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
             // Facilitators see groups where they are main facilitator OR co-facilitator
             groups = await dbAll(`
                 SELECT fg.*, u.name as facilitator_name, u2.name as co_facilitator_name,
@@ -113,6 +115,19 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
     }
 })
 
+// --- GET NEXT CODE (must be before /:id to avoid catch-all) ---
+router.get('/next-code', requireAuth, async (req, res) => {
+    try {
+        const { campus } = req.query
+        if (!campus) return res.status(400).json({ success: false, message: 'campus required' })
+        const code = await generateGroupCode(campus)
+        res.json({ success: true, code })
+    } catch (error) {
+        console.error('Get next code error:', error)
+        res.status(500).json({ success: false, message: 'Failed to generate next code' })
+    }
+})
+
 // --- GET GROUP DETAIL ---
 router.get('/:id', requireAuth, async (req, res) => {
     try {
@@ -130,11 +145,11 @@ router.get('/:id', requireAuth, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
 
-        // Access check — facilitators can access if they are main OR co-facilitator
-        if (user.role === 'Facilitator' && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+        // Access check — facilitators/co-facilitators can access if they are main OR co-facilitator
+        if ((user.role === 'Facilitator' || user.role === 'CoFacilitator') && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
-        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator') {
+        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator' && user.role !== 'CoFacilitator') {
             if (group.celebration_point !== user.celebration_point) {
                 return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
             }
@@ -186,12 +201,23 @@ router.post('/', requireAuth, async (req, res) => {
         }
 
         // Use provided group_code or auto-generate
-        const code = group_code || await generateGroupCode(celebration_point)
-
-        // Validate group_code format: must be 3 uppercase letters + exactly 2 digits
-        if (!/^[A-Z]{3}\d{2}$/.test(code)) {
-            return res.status(400).json({ success: false, message: 'Group code must be 3 letters + 2 digits (e.g. WDT01)' })
+        let code
+        if (group_code) {
+            const normalised = group_code.trim().toUpperCase()
+            const match = normalised.match(/^([A-Z]{3})(\d+)$/)
+            if (!match) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Group code must be campus prefix + 2-digit number (e.g. WDT01)'
+                })
+            }
+            const [, codePrefix, num] = match
+            code = `${codePrefix}${String(parseInt(num, 10)).padStart(2, '0')}`
+        } else {
+            code = await generateGroupCode(celebration_point)
         }
+
+
 
         // Validate co-facilitator is different from main facilitator
         if (co_facilitator_user_id && facilitator_user_id && co_facilitator_user_id === facilitator_user_id) {
@@ -206,7 +232,7 @@ router.post('/', requireAuth, async (req, res) => {
 
         const result = await dbRun(
             'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort) VALUES (?, ?, ?, ?, ?, ?)',
-            [code, name, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort || '2025']
+            [code, code, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort || '2025']
         )
 
         res.json({ success: true, groupId: result.lastInsertRowid, group_code: code })
@@ -246,7 +272,7 @@ router.put('/:id', requireAuth, async (req, res) => {
 
         await dbRun(
             `UPDATE formation_groups 
-             SET name = COALESCE(?, name), 
+             SET name = group_code, 
                  celebration_point = COALESCE(?, celebration_point),
                  facilitator_user_id = COALESCE(?, facilitator_user_id),
                  co_facilitator_user_id = ?,
@@ -254,7 +280,6 @@ router.put('/:id', requireAuth, async (req, res) => {
                  active = COALESCE(?, active)
              WHERE id = ?`,
             [
-                name !== undefined ? name : null,
                 celebration_point !== undefined ? celebration_point : null,
                 facilitator_user_id !== undefined ? facilitator_user_id : null,
                 co_facilitator_user_id !== undefined ? co_facilitator_user_id : null,
@@ -359,11 +384,11 @@ router.get('/facilitators/available', requireAuth, async (req, res) => {
 
         if (GLOBAL_ROLES.includes(user.role)) {
             facilitators = await dbAll(
-                "SELECT id, name, celebration_point FROM users WHERE role = 'Facilitator' AND active = 1 ORDER BY name"
+                "SELECT id, name, role, celebration_point FROM users WHERE (role = 'Facilitator' OR role = 'CoFacilitator') AND active = 1 ORDER BY name"
             )
         } else {
             facilitators = await dbAll(
-                "SELECT id, name, celebration_point FROM users WHERE role = 'Facilitator' AND active = 1 AND celebration_point = ? ORDER BY name",
+                "SELECT id, name, role, celebration_point FROM users WHERE (role = 'Facilitator' OR role = 'CoFacilitator') AND active = 1 AND celebration_point = ? ORDER BY name",
                 [user.celebration_point]
             )
         }
@@ -372,6 +397,57 @@ router.get('/facilitators/available', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('Get facilitators error:', error)
         res.status(500).json({ success: false, message: 'Failed to fetch facilitators' })
+    }
+})
+
+
+// --- GET GROUP COMMENTS ---
+router.get('/:id/comments', requireAuth, async (req, res) => {
+    try {
+        const user = req.session.user
+        const group = await dbGet('SELECT * FROM formation_groups WHERE id = ?', [req.params.id])
+        if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
+
+        // Access check: Facilitator/CoFacilitator must be assigned to this group
+        if (user.role === 'Facilitator' && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+        if (user.role === 'CoFacilitator' && group.co_facilitator_user_id !== user.id) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+
+        const comments = await getGroupNotes(req.params.id)
+        res.json({ success: true, comments })
+    } catch (error) {
+        console.error('Get group comments error:', error)
+        res.status(500).json({ success: false, message: 'Failed to fetch comments' })
+    }
+})
+
+// --- POST GROUP COMMENT ---
+router.post('/:id/comments', requireAuth, async (req, res) => {
+    try {
+        const user = req.session.user
+        const { content } = req.body
+        if (!content?.trim()) return res.status(400).json({ success: false, message: 'Content required' })
+
+        const group = await dbGet('SELECT * FROM formation_groups WHERE id = ?', [req.params.id])
+        if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
+
+        // Who can comment: Facilitator (own group), CoFacilitator (own group), Coordinator (own campus), Pastor (own campus), Admin
+        const canComment =
+            userHasRole(user, 'Admin') ||
+            (user.role === 'Facilitator' && (group.facilitator_user_id === user.id || group.co_facilitator_user_id === user.id)) ||
+            (user.role === 'CoFacilitator' && group.co_facilitator_user_id === user.id) ||
+            (['Coordinator', 'Pastor'].includes(user.role) && group.celebration_point === user.celebration_point)
+
+        if (!canComment) return res.status(403).json({ success: false, message: 'Access denied' })
+
+        await addGroupNote(req.params.id, user.name, group.celebration_point, content.trim(), user.role, 'group')
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Post group comment error:', error)
+        res.status(500).json({ success: false, message: 'Failed to add comment' })
     }
 })
 

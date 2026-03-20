@@ -16,7 +16,7 @@
 // --- Constants ---
 
 // Roles that are scoped to a single campus (celebration_point)
-const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'Facilitator']
+const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
 
 // Roles with global (all-campus) visibility
 const GLOBAL_ROLES = ['Admin', 'LeadershipTeam']
@@ -30,14 +30,25 @@ function getUserRoles(user) {
     return [user.role]
 }
 
-/** Check if user has a specific role */
+/** Returns all roles this user holds (primary + secondary_roles) */
+function userRoles(user) {
+    if (!user) return []
+    const primary = getUserRoles(user)
+    try {
+        const secondary = JSON.parse(user.secondary_roles || '[]')
+        const combined = [...new Set([...primary, ...secondary])]
+        return combined
+    } catch { return primary }
+}
+
+/** Check if user has a specific role (checks primary, roles, AND secondary_roles) */
 function userHasRole(user, role) {
-    return getUserRoles(user).includes(role)
+    return userRoles(user).includes(role)
 }
 
 /** Check if user has ANY of the specified roles */
 function userHasAnyRole(user, roleList) {
-    return getUserRoles(user).some(r => roleList.includes(r))
+    return userRoles(user).some(r => roleList.includes(r))
 }
 
 // --- Core Middleware ---
@@ -137,4 +148,4 @@ export function applyCampusScope(req, res, next) {
     next()
 }
 
-export { CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, getUserRoles, userHasRole, userHasAnyRole }
+export { CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, getUserRoles, userRoles, userHasRole, userHasAnyRole }

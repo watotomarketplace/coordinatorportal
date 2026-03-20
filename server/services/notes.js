@@ -32,8 +32,9 @@ export async function getGroupNotes(groupId) {
 }
 
 export async function addGroupNote(groupId, authorName, celebrationPoint, content, authorRole = null, noteType = 'coordinator') {
+    // student_id is NOT NULL in the notes schema — pass '' for group-level notes (no student involved)
     return await dbRun(`
-        INSERT INTO notes (group_id, author_name, celebration_point, content, author_role, note_type)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `, [groupId, authorName, celebrationPoint, content, authorRole, noteType])
+        INSERT INTO notes (student_id, group_id, author_name, celebration_point, content, author_role, note_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, ['', groupId, authorName, celebrationPoint, content, authorRole, noteType])
 }

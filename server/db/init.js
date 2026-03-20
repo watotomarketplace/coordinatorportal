@@ -65,7 +65,7 @@ export async function initDatabase() {
 // Abstracted migrations that modify schema syntax based on current dialect
 async function runMigrations() {
   function getPK() { return IS_POSTGRES ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT' }
-  const ALL_ROLES = "'Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'Facilitator', 'TechSupport'"
+  const ALL_ROLES = "'Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'CoFacilitator', 'Facilitator', 'TechSupport'"
 
   await dbRun(`
     CREATE TABLE IF NOT EXISTS notes (
@@ -268,6 +268,9 @@ async function runMigrations() {
   // Backfill: copy single 'role' into 'roles' for any users that haven't been migrated
   try { await dbRun("UPDATE users SET roles = role WHERE roles IS NULL") } catch (_) {}
 
+  // ─── Multi-Role: add secondary_roles column (JSON array) ───
+  try { await dbRun("ALTER TABLE users ADD COLUMN secondary_roles TEXT DEFAULT '[]'") } catch (_) {}
+
   // ─── Co-Facilitator: add second facilitator column to formation_groups ───
   try { await dbRun('ALTER TABLE formation_groups ADD COLUMN co_facilitator_user_id INTEGER') } catch (_) {}
 
@@ -300,6 +303,15 @@ async function runMigrations() {
     }
   } catch (err) {
     console.error('⚠️ Failed to run group code normalization migration:', err.message)
+  }
+
+  // Fix corrupted group names — reset name = group_code for all groups
+  // Safe to run on every boot (idempotent)
+  try {
+    await dbRun("UPDATE formation_groups SET name = group_code WHERE name != group_code")
+    console.log('✅ Formation group names synced to group_code')
+  } catch (e) {
+    console.error('Failed to sync group names:', e.message)
   }
 
   // Check if admin exists

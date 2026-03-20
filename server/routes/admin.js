@@ -14,8 +14,8 @@ const imagesDir = join(__dirname, '../../Profile Images')
 const router = express.Router()
 
 // Roles that require a celebration_point assignment (PRD v2 Section 2)
-const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'Facilitator']
-const ALL_VALID_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'Facilitator', 'TechSupport']
+const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
+const ALL_VALID_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'CoFacilitator', 'Facilitator', 'TechSupport']
 
 // Helper: parse roles from comma-separated string or array
 function parseRoles(input) {
@@ -44,7 +44,7 @@ function requireUserManager(req, res, next) {
 router.get('/users', requireUserManager, async (req, res) => {
     try {
         const currentUser = req.session.user
-        let users = await dbAll('SELECT id, username, name, role, roles, celebration_point, profile_image, active, created_at FROM users ORDER BY name')
+        let users = await dbAll('SELECT id, username, name, role, roles, secondary_roles, celebration_point, profile_image, active, created_at FROM users ORDER BY name')
 
         // Filter based on role restrictions
         const currentRoles = parseRoles(currentUser.roles || currentUser.role)
@@ -69,7 +69,11 @@ router.get('/users', requireUserManager, async (req, res) => {
         }
 
         // Parse roles into arrays for the frontend
-        users = users.map(u => ({ ...u, roles: u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role] }))
+        users = users.map(u => ({
+            ...u,
+            roles: u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role],
+            secondary_roles: (() => { try { return JSON.parse(u.secondary_roles || '[]') } catch { return [] } })()
+        }))
 
         res.json({ success: true, users })
     } catch (error) {
@@ -156,9 +160,13 @@ router.post('/users', requireUserManager, async (req, res) => {
         const hashedPassword = bcrypt.hashSync(password, 10)
         const rolesString = rolesList.join(',')
 
+        // Secondary roles: filter out Admin and the primary role
+        const secondaryRoles = (req.body.secondary_roles || [])
+            .filter(r => ALL_VALID_ROLES.includes(r) && r !== 'Admin' && r !== primaryRole)
+
         const result = await dbRun(
-            'INSERT INTO users (username, password, name, role, roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
-            [username, hashedPassword, name, primaryRole, rolesString, finalCelebrationPoint, selectedImage || null]
+            'INSERT INTO users (username, password, name, role, roles, secondary_roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
+            [username, hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, selectedImage || null]
         )
 
         res.json({ success: true, userId: result.lastInsertRowid })
@@ -365,16 +373,20 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
 
         const rolesString = rolesList.join(',')
 
+        // Secondary roles: filter out Admin and the primary role
+        const secondaryRoles = (req.body.secondary_roles || [])
+            .filter(r => ALL_VALID_ROLES.includes(r) && r !== 'Admin' && r !== primaryRole)
+
         if (password) {
             const hashedPassword = bcrypt.hashSync(password, 10)
             await dbRun(
-                'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [hashedPassword, name, primaryRole, rolesString, finalCelebrationPoint, req.body.profile_image || null, id]
+                'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, req.body.profile_image || null, id]
             )
         } else {
             await dbRun(
-                'UPDATE users SET name = ?, role = ?, roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [name, primaryRole, rolesString, finalCelebrationPoint, req.body.profile_image || null, id]
+                'UPDATE users SET name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, req.body.profile_image || null, id]
             )
         }
 

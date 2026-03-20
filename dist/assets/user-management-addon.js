@@ -529,6 +529,8 @@
               if (checked.length > 0) {
                 body.roles = checked.join(',');
                 body.role = checked[0];
+                // secondary_roles = all checked except the primary role
+                body.secondary_roles = checked.filter(r => r !== checked[0]);
                 options.body = JSON.stringify(body);
               }
             }
@@ -545,7 +547,12 @@
           clone.json().then(data => {
             if (data.success && data.users) {
               data.users.forEach(u => {
-                userRolesMap.set(u.username, u.roles || [u.role]);
+                // Merge primary roles with secondary_roles for the checkbox map
+                const primaryRoles = Array.isArray(u.roles) ? u.roles : (u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role]);
+                let secondaryRoles = [];
+                try { secondaryRoles = Array.isArray(u.secondary_roles) ? u.secondary_roles : JSON.parse(u.secondary_roles || '[]'); } catch(_) {}
+                const allRoles = [...new Set([...primaryRoles, ...secondaryRoles])];
+                userRolesMap.set(u.username, allRoles);
               });
               // Give the React DOM a moment to paint, then re-enhance badges
               setTimeout(() => {

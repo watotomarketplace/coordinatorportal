@@ -154,63 +154,100 @@
       .um-role-badge.admin { background: rgba(255,69,58,0.15); color: #ff453a; border-color: rgba(255,69,58,0.3); }
       .um-role-badge.leadershipteam { background: rgba(255,214,10,0.15); color: #ffd60a; border-color: rgba(255,214,10,0.3); }
       .um-role-badge.facilitator { background: rgba(48,209,88,0.15); color: #30d158; border-color: rgba(48,209,88,0.3); }
+      .um-role-badge.cofacilitator { background: rgba(48,209,88,0.10); color: #28b14c; border-color: rgba(48,209,88,0.25); }
 
-      /* ─ Multi-Role Checkboxes (Compact Premium Grid) ─ */
-      .um-role-checkboxes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-      .um-role-checkbox-item {
-        display: flex; align-items: center; gap: 6px; padding: 7px 8px;
-        border-radius: 10px; background: var(--glass-layer-1);
+      /* ─ Permission Picker (iOS-style toggle rows) ─ */
+      .um-role-picker {
+        display: flex; flex-direction: column; gap: 8px;
+        margin-top: 4px;
+      }
+      .um-role-hint {
+        font-size: 11px; color: var(--text-secondary); opacity: 0.7;
+        padding: 0 2px 4px; line-height: 1.45;
+      }
+      .um-role-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 14px; border-radius: 12px;
+        background: var(--glass-layer-1);
         border: 1.5px solid rgba(255,255,255,0.06);
-        cursor: pointer; transition: all 0.25s cubic-bezier(.22, 1, .36, 1);
-        user-select: none; position: relative; overflow: hidden;
-        min-width: 0;
+        cursor: pointer; user-select: none;
+        transition: background 0.22s cubic-bezier(.22, 1, .36, 1),
+                    border-color 0.22s cubic-bezier(.22, 1, .36, 1),
+                    transform 0.15s cubic-bezier(.22, 1, .36, 1),
+                    box-shadow 0.22s cubic-bezier(.22, 1, .36, 1);
+        position: relative; outline: none;
       }
-      .um-role-checkbox-item::before {
-        content: ''; position: absolute; inset: 0; opacity: 0;
-        transition: opacity 0.25s; border-radius: 10px; pointer-events: none;
+      .um-role-row:hover {
+        background: var(--glass-layer-2);
+        transform: translateY(-1px);
       }
-      .um-role-checkbox-item:hover { background: var(--glass-layer-2); transform: translateY(-1px); }
-      .um-role-checkbox-item:active { transform: scale(0.97); }
-      .um-role-checkbox-item.checked {
-        border-color: rgba(74,158,255,0.4);
-        box-shadow: 0 0 0 1px rgba(74,158,255,0.1), 0 2px 6px rgba(74,158,255,0.06);
+      .um-role-row:focus-visible {
+        box-shadow: 0 0 0 2px rgba(74,158,255,0.45);
       }
-      .um-role-checkbox-item.checked::before { opacity: 1; }
-      /* Role-specific accent colors when checked */
-      .um-role-checkbox-item.checked[data-role="Coordinator"] { border-color: rgba(102,126,234,0.5); }
-      .um-role-checkbox-item.checked[data-role="Coordinator"]::before { background: rgba(102,126,234,0.10); }
-      .um-role-checkbox-item.checked[data-role="TechSupport"] { border-color: rgba(0,122,255,0.5); }
-      .um-role-checkbox-item.checked[data-role="TechSupport"]::before { background: rgba(0,122,255,0.10); }
-      .um-role-checkbox-item.checked[data-role="Pastor"] { border-color: rgba(191,90,242,0.5); }
-      .um-role-checkbox-item.checked[data-role="Pastor"]::before { background: rgba(191,90,242,0.10); }
-      .um-role-checkbox-item.checked[data-role="Facilitator"] { border-color: rgba(48,209,88,0.5); }
-      .um-role-checkbox-item.checked[data-role="Facilitator"]::before { background: rgba(48,209,88,0.10); }
-      .um-role-checkbox-item.checked[data-role="LeadershipTeam"] { border-color: rgba(255,214,10,0.5); }
-      .um-role-checkbox-item.checked[data-role="LeadershipTeam"]::before { background: rgba(255,214,10,0.10); }
-      .um-role-checkbox-item.checked[data-role="Admin"] { border-color: rgba(255,69,58,0.5); }
-      .um-role-checkbox-item.checked[data-role="Admin"]::before { background: rgba(255,69,58,0.10); }
-      .um-role-checkbox-item input[type="checkbox"] {
-        appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
-        border-radius: 5px; border: 1.5px solid rgba(255,255,255,0.15);
-        background: var(--glass-layer-2); cursor: pointer;
-        position: relative; flex-shrink: 0;
-        transition: all 0.2s cubic-bezier(.22, 1, .36, 1);
+      .um-role-row.checked {
+        background: var(--glass-layer-2);
+        border-color: rgba(255,255,255,0.12);
       }
-      .um-role-checkbox-item input[type="checkbox"]:checked {
-        background: linear-gradient(135deg, #4A9EFF 0%, #667eea 100%);
-        border-color: transparent;
-        box-shadow: 0 2px 4px rgba(74,158,255,0.25);
+      .um-role-dot {
+        width: 10px; height: 10px; border-radius: 50%;
+        flex-shrink: 0; opacity: 0.35;
+        transition: opacity 0.2s, box-shadow 0.2s;
       }
-      .um-role-checkbox-item input[type="checkbox"]:checked::after {
-        content: '✓'; position: absolute; inset: 0;
-        display: flex; align-items: center; justify-content: center;
-        color: white; font-size: 10px; font-weight: 700;
+      .um-role-row.checked .um-role-dot {
+        opacity: 1;
       }
-      .um-role-checkbox-item label {
-        font-size: 11px; color: var(--text-primary); cursor: pointer;
-        font-weight: 500; position: relative; z-index: 1;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        min-width: 0;
+      .um-role-row.checked[data-role="Coordinator"] .um-role-dot { box-shadow: 0 0 10px rgba(102,126,234,0.8); }
+      .um-role-row.checked[data-role="Pastor"] .um-role-dot { box-shadow: 0 0 10px rgba(191,90,242,0.8); }
+      .um-role-row.checked[data-role="Facilitator"] .um-role-dot { box-shadow: 0 0 10px rgba(48,209,88,0.8); }
+      .um-role-row.checked[data-role="CoFacilitator"] .um-role-dot { box-shadow: 0 0 10px rgba(40,177,76,0.8); }
+      .um-role-row.checked[data-role="TechSupport"] .um-role-dot { box-shadow: 0 0 10px rgba(0,122,255,0.8); }
+      .um-role-row.checked[data-role="LeadershipTeam"] .um-role-dot { box-shadow: 0 0 10px rgba(255,214,10,0.8); }
+      .um-role-row.checked[data-role="Admin"] .um-role-dot { box-shadow: 0 0 10px rgba(255,69,58,0.8); }
+      .um-role-info {
+        flex: 1; min-width: 0;
+      }
+      .um-role-name {
+        font-size: 14px; font-weight: 600;
+        color: var(--text-primary);
+        display: flex; align-items: center; gap: 8px;
+        line-height: 1.2;
+      }
+      .um-role-primary-pill {
+        display: none;
+        font-size: 9px; font-weight: 700; letter-spacing: 0.4px;
+        text-transform: uppercase; padding: 2px 6px;
+        border-radius: 999px; background: rgba(74,158,255,0.15);
+        color: #4A9EFF; border: 1px solid rgba(74,158,255,0.28);
+      }
+      .um-role-row.primary .um-role-primary-pill { display: inline-block; }
+      .um-role-desc {
+        font-size: 11px; color: var(--text-secondary);
+        margin-top: 3px; line-height: 1.35; opacity: 0.75;
+        white-space: normal;
+      }
+      .um-role-toggle {
+        flex-shrink: 0; width: 40px; height: 24px;
+        border-radius: 999px; background: rgba(120,120,128,0.32);
+        position: relative;
+        transition: background 0.25s cubic-bezier(.22, 1, .36, 1);
+      }
+      .um-role-toggle-knob {
+        position: absolute; top: 2px; left: 2px;
+        width: 20px; height: 20px; border-radius: 50%;
+        background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+        transition: transform 0.25s cubic-bezier(.22, 1, .36, 1);
+      }
+      .um-role-row.checked .um-role-toggle-knob { transform: translateX(16px); }
+      .um-role-row.checked[data-role="Coordinator"] .um-role-toggle { background: #667eea; }
+      .um-role-row.checked[data-role="Pastor"] .um-role-toggle { background: #bf5af2; }
+      .um-role-row.checked[data-role="Facilitator"] .um-role-toggle { background: #30d158; }
+      .um-role-row.checked[data-role="CoFacilitator"] .um-role-toggle { background: #28b14c; }
+      .um-role-row.checked[data-role="TechSupport"] .um-role-toggle { background: #007aff; }
+      .um-role-row.checked[data-role="LeadershipTeam"] .um-role-toggle { background: #ffd60a; }
+      .um-role-row.checked[data-role="Admin"] .um-role-toggle { background: #ff453a; }
+      .um-role-hidden-input {
+        position: absolute; opacity: 0; pointer-events: none;
+        width: 1px; height: 1px;
       }
 
       /* ─ Result Count ─ */
@@ -375,7 +412,7 @@
       if (!noResults) {
         noResults = document.createElement('div');
         noResults.className = 'um-no-results';
-        noResults.innerHTML = '<div class="um-no-results-icon">🔍</div>' +
+        noResults.innerHTML = '<div class="um-no-results-icon">' + (window.__ICONS__?.search || '🔍') + '</div>' +
           '<div class="um-no-results-text">No users found</div>' +
           '<div class="um-no-results-sub">Try adjusting your search terms</div>';
         grid.parentElement.insertBefore(noResults, grid.nextSibling);
@@ -387,6 +424,10 @@
   }
 
   // ─── Enhance Role Display (multi-role badges) ──────────────
+  // IMPORTANT: never replaceWith() / removeChild() on React-rendered nodes —
+  // it triggers React's "Failed to execute 'removeChild'" reconciliation error.
+  // We instead style the existing span in place and render extra badges in a
+  // sibling container that React doesn't track.
   function enhanceRoleBadges() {
     const cards = qsa('.user-card');
     cards.forEach(card => {
@@ -402,30 +443,47 @@
         ? userRolesMap.get(username)
         : [roleSpan.textContent.trim()];
 
+      // Style the React-owned span in place to show the primary role badge
+      const primary = roles[0] || roleSpan.textContent.trim();
+      const primaryLower = primary.toLowerCase().replace(/\s+/g, '');
+      roleSpan.classList.add('um-role-badge', primaryLower);
+      roleSpan.textContent = primary;
+      roleSpan.style.cssText = '';
+
+      // Remove any addon-owned secondary container we previously created
+      const prevExtras = card.querySelector('.um-role-extras');
+      if (prevExtras && prevExtras.parentNode === card) {
+        try { card.removeChild(prevExtras); } catch (_) {}
+      }
+
+      // For multi-role users, append addon-owned badges in a sibling container
+      // that React knows nothing about (safe to mutate)
       if (roles.length > 1) {
-        const container = document.createElement('div');
-        container.className = 'um-role-badges';
-        roles.forEach(r => {
+        const extras = document.createElement('div');
+        extras.className = 'um-role-extras um-role-badges';
+        extras.style.cssText = 'margin-top:6px;';
+        roles.slice(1).forEach(r => {
           const badge = document.createElement('span');
           const roleLower = r.toLowerCase().replace(/\s+/g, '');
           badge.className = 'um-role-badge ' + roleLower;
           badge.textContent = r;
-          container.appendChild(badge);
+          extras.appendChild(badge);
         });
-        roleSpan.replaceWith(container);
-      } else {
-        const currentRole = roles[0] || roleSpan.textContent.trim();
-        const roleLower = currentRole.toLowerCase().replace(/\s+/g, '');
-        roleSpan.className = 'um-role-badge ' + roleLower;
-        roleSpan.textContent = currentRole;
-        roleSpan.style.cssText = '';
+        // Insert immediately after the role span's nearest container
+        const host = roleSpan.parentElement || card;
+        host.appendChild(extras);
       }
 
       card.dataset.rolesEnhanced = 'true';
     });
   }
 
-  // ─── Enhance Create/Edit Modal (multi-role checkboxes) ─────
+  // ─── Enhance Create/Edit Modal (iOS-style permission toggles) ─
+  // We never remove or replace React-rendered nodes here. We hide the React
+  // <select> in place (still owned by React) and append our addon-owned
+  // picker as a sibling. On change, we mirror the chosen primary role into
+  // the React select via its native value setter so the form state stays in
+  // sync without React's reconciler tripping.
   function enhanceModal() {
     const modal = qs('.modal-overlay .modal');
     if (!modal) return;
@@ -443,19 +501,6 @@
 
     const currentValue = selectEl.value;
 
-    const container = document.createElement('div');
-    container.className = 'um-role-checkboxes';
-    container.id = 'um-role-picker';
-
-    const allRoles = [
-      { value: 'Coordinator', label: 'Coordinator' },
-      { value: 'Pastor', label: 'Pastor' },
-      { value: 'Facilitator', label: 'Facilitator' },
-      { value: 'TechSupport', label: 'Tech Support' },
-      { value: 'LeadershipTeam', label: 'Leadership Team' },
-      { value: 'Admin', label: 'Admin' }
-    ];
-
     // Find username field if editing
     let currentUsername = null;
     modal.querySelectorAll('.form-group').forEach(fg => {
@@ -467,43 +512,142 @@
     });
 
     const userRoles = (currentUsername && userRolesMap.has(currentUsername))
-      ? userRolesMap.get(currentUsername)
-      : [currentValue];
+      ? userRolesMap.get(currentUsername).slice()
+      : (currentValue ? [currentValue] : []);
+
+    const allRoles = [
+      { value: 'Coordinator',   label: 'Coordinator',     dot: '#667eea', desc: 'Campus-scoped read/write — manage groups, students, and reports' },
+      { value: 'Pastor',         label: 'Pastor',          dot: '#bf5af2', desc: 'Campus-scoped read-only oversight across all groups' },
+      { value: 'Facilitator',    label: 'Facilitator',     dot: '#30d158', desc: 'Group-scoped — submit attendance, comments and weekly reports' },
+      { value: 'CoFacilitator',  label: 'Co-Facilitator',  dot: '#28b14c', desc: 'Assist facilitator with check-in and comments' },
+      { value: 'TechSupport',    label: 'Tech Support',    dot: '#007aff', desc: 'Campus-scoped — password resets, name fixes, Thinkific write-back' },
+      { value: 'LeadershipTeam', label: 'Leadership Team', dot: '#ffd60a', desc: 'Global read-only across all 19 campuses' },
+      { value: 'Admin',          label: 'Admin',           dot: '#ff453a', desc: 'Full system access — must be the primary role if assigned' }
+    ];
+
+    // Build the addon-owned picker (sibling to React select; we never touch React DOM)
+    const picker = document.createElement('div');
+    picker.className = 'um-role-picker';
+    picker.id = 'um-role-picker';
+    picker.setAttribute('role', 'group');
+    picker.setAttribute('aria-label', 'Permissions');
+
+    const hint = document.createElement('div');
+    hint.className = 'um-role-hint';
+    hint.textContent = 'Toggle one or more permissions. The first selected becomes the primary role.';
+    picker.appendChild(hint);
+
+    const orderedSelected = userRoles.filter(r => allRoles.some(x => x.value === r));
 
     allRoles.forEach(role => {
-      const item = document.createElement('div');
-      const isChecked = userRoles.includes(role.value);
-      item.className = 'um-role-checkbox-item' + (isChecked ? ' checked' : '');
-      item.setAttribute('data-role', role.value);
-      item.innerHTML = '<input type="checkbox" id="role-' + role.value + '" value="' + role.value + '"' + (isChecked ? ' checked' : '') + ' />' +
-        '<label for="role-' + role.value + '">' + role.label + '</label>';
+      const isChecked = orderedSelected.includes(role.value);
+      const row = document.createElement('div');
+      row.className = 'um-role-row' + (isChecked ? ' checked' : '');
+      row.setAttribute('data-role', role.value);
+      row.setAttribute('role', 'switch');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-checked', isChecked ? 'true' : 'false');
 
-      item.addEventListener('click', function (e) {
-        if (e.target.tagName === 'INPUT') return;
-        const cb = item.querySelector('input');
-        cb.checked = !cb.checked;
-        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      row.innerHTML =
+        '<span class="um-role-dot" style="background:' + role.dot + ';"></span>' +
+        '<div class="um-role-info">' +
+          '<div class="um-role-name">' + role.label +
+            '<span class="um-role-primary-pill">Primary</span>' +
+          '</div>' +
+          '<div class="um-role-desc">' + role.desc + '</div>' +
+        '</div>' +
+        '<div class="um-role-toggle"><div class="um-role-toggle-knob"></div></div>' +
+        '<input class="um-role-hidden-input" type="checkbox" value="' + role.value + '"' + (isChecked ? ' checked' : '') + ' />';
+
+      row.addEventListener('click', function (e) {
+        e.preventDefault();
+        toggleRow(row);
       });
-      item.querySelector('input').addEventListener('change', function () {
-        const checked = getCheckedRoles();
-        if (checked.length > 0) {
-          selectEl.value = checked[0];
-          selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      row.addEventListener('keydown', function (e) {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          toggleRow(row);
         }
-        container.querySelectorAll('.um-role-checkbox-item').forEach(el => {
-          el.classList.toggle('checked', el.querySelector('input').checked);
-        });
-        selectEl.dataset.selectedRoles = checked.join(',');
       });
-      container.appendChild(item);
+      picker.appendChild(row);
     });
 
-    // Update label
-    const formLabel = selectEl.closest('.form-group')?.querySelector('.form-label');
-    if (formLabel) formLabel.textContent = 'Permissions (select one or more)';
+    function toggleRow(row) {
+      const cb = row.querySelector('input');
+      const willCheck = !cb.checked;
+      const role = row.getAttribute('data-role');
 
+      if (willCheck) {
+        const checkedNow = getCheckedRoles();
+        if (checkedNow.length >= 4) {
+          showRoleValidationError(picker, 'Maximum of 4 permissions per user');
+          return;
+        }
+        if (role === 'Admin' && checkedNow.length > 0 && checkedNow[0] !== 'Admin') {
+          // Admin can only be primary — clear others
+          showRoleValidationError(picker, 'Admin grants full access — other roles cleared');
+          picker.querySelectorAll('.um-role-row').forEach(r => {
+            const rcb = r.querySelector('input');
+            rcb.checked = false;
+            r.classList.remove('checked', 'primary');
+            r.setAttribute('aria-checked', 'false');
+          });
+        } else if (checkedNow.includes('Admin') && role !== 'Admin') {
+          showRoleValidationError(picker, 'Remove Admin first to assign other roles');
+          return;
+        }
+      }
+
+      cb.checked = willCheck;
+      row.classList.toggle('checked', willCheck);
+      row.setAttribute('aria-checked', willCheck ? 'true' : 'false');
+
+      // Ensure at least one role stays selected
+      const checked = getCheckedRoles();
+      if (checked.length === 0) {
+        cb.checked = true;
+        row.classList.add('checked');
+        row.setAttribute('aria-checked', 'true');
+        showRoleValidationError(picker, 'At least one permission is required');
+        return;
+      }
+
+      clearRoleValidationError(picker);
+      updatePrimaryPill();
+      syncReactSelect(checked[0]);
+      selectEl.dataset.selectedRoles = checked.join(',');
+    }
+
+    function updatePrimaryPill() {
+      const checked = getCheckedRoles();
+      const primary = checked[0];
+      picker.querySelectorAll('.um-role-row').forEach(r => {
+        r.classList.toggle('primary', r.getAttribute('data-role') === primary);
+      });
+    }
+
+    function syncReactSelect(value) {
+      // Use React's native setter so onChange fires inside the React form
+      const proto = window.HTMLSelectElement && window.HTMLSelectElement.prototype;
+      const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+      try {
+        if (setter) setter.call(selectEl, value);
+        else selectEl.value = value;
+      } catch (_) { selectEl.value = value; }
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      selectEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // Update label text in place — DO NOT replace the node
+    const formLabel = selectEl.closest('.form-group')?.querySelector('.form-label');
+    if (formLabel) formLabel.textContent = 'Permissions';
+
+    // Hide React's select (still in DOM, still owned by React) and append picker as sibling
     selectEl.style.display = 'none';
-    selectEl.parentElement.appendChild(container);
+    selectEl.setAttribute('aria-hidden', 'true');
+    selectEl.parentElement.appendChild(picker);
+
+    updatePrimaryPill();
 
     modal.dataset.rolesEnhanced = 'true';
   }
@@ -511,7 +655,28 @@
   function getCheckedRoles() {
     const picker = qs('#um-role-picker');
     if (!picker) return [];
-    return Array.from(picker.querySelectorAll('input:checked')).map(cb => cb.value);
+    return Array.from(picker.querySelectorAll('.um-role-row')).filter(r => {
+      const cb = r.querySelector('input');
+      return cb && cb.checked;
+    }).map(r => r.getAttribute('data-role'));
+  }
+
+  function showRoleValidationError(container, msg) {
+    let errEl = container.parentElement.querySelector('.um-role-error');
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'um-role-error';
+      errEl.style.cssText = 'color:#ff453a;font-size:11px;margin-top:6px;padding:6px 10px;background:rgba(255,69,58,0.08);border-radius:8px;border:1px solid rgba(255,69,58,0.15);';
+      container.parentElement.appendChild(errEl);
+    }
+    errEl.textContent = msg;
+    errEl.style.display = '';
+    setTimeout(() => { if (errEl) errEl.style.display = 'none'; }, 3000);
+  }
+
+  function clearRoleValidationError(container) {
+    const errEl = container.parentElement.querySelector('.um-role-error');
+    if (errEl) errEl.style.display = 'none';
   }
 
   // ─── Intercept network requests (fetch) ─────────
@@ -607,7 +772,7 @@
 
           <input type="file" id="um-bulk-file-input" accept=".csv" style="display:none;" />
           <div class="um-bulk-dropzone" id="um-bulk-dropzone">
-             <div style="font-size:40px;margin-bottom:16px;">📄</div>
+             <div style="font-size:40px;margin-bottom:16px;">${window.__ICONS__?.clipboard || '📄'}</div>
              <h3 style="margin:0 0 8px;font-size:16px;">Drag 'n' Drop CSV here</h3>
              <p style="margin:0 0 16px;color:var(--text-secondary);font-size:13px;">or click to browse from your computer</p>
              <button class="btn-secondary" id="um-bulk-browse-btn">Browse Files</button>
@@ -807,7 +972,7 @@
         
         if (data.success) {
            const sum = data.summary;
-           overlay.querySelector('#um-bulk-result-icon').textContent = sum.failed === 0 ? '✅' : '⚠️';
+           overlay.querySelector('#um-bulk-result-icon').innerHTML = sum.failed === 0 ? (window.__ICONS__?.checkCircle || '✅') : (window.__ICONS__?.warning || '⚠️');
            overlay.querySelector('#um-bulk-result-title').textContent = sum.failed === 0 ? 'Import Successful' : 'Completed with Errors';
            
            let descHtml = `Successfully created <strong>${sum.created}</strong> users.`;
@@ -816,15 +981,15 @@
            
            if (sendEmails) {
               if (data.emailConfigured) {
-                 descHtml += `<br/><br/>📨 Sent credentials to ${sum.emailed} email addresses.`;
+                 descHtml += `<br/><br/>${window.__ICONS__?.inbox || '📨'} Sent credentials to ${sum.emailed} email addresses.`;
               } else {
-                 descHtml += `<br/><br/>⚠️ Emails were not sent because SMTP is not configured on the server.`;
+                 descHtml += `<br/><br/>${window.__ICONS__?.warning || '⚠️'} Emails were not sent because SMTP is not configured on the server.`;
               }
            }
            
            overlay.querySelector('#um-bulk-result-desc').innerHTML = descHtml;
         } else {
-           overlay.querySelector('#um-bulk-result-icon').textContent = '❌';
+           overlay.querySelector('#um-bulk-result-icon').innerHTML = window.__ICONS__?.error || '❌';
            overlay.querySelector('#um-bulk-result-title').textContent = 'Import Failed';
            overlay.querySelector('#um-bulk-result-desc').textContent = data.message || 'An unknown error occurred.';
         }
@@ -838,17 +1003,22 @@
 
   // ─── Main Enhancement Loop ─────────────────────────────────
   function enhance() {
-    const header = qs('.section-header, .admin-header');
-    if (!header) return;
-    const h2 = header.querySelector('h2');
-    if (!h2 || !h2.textContent.includes('User Management')) return;
+    try {
+      const header = qs('.section-header, .admin-header');
+      if (!header) return;
+      const h2 = header.querySelector('h2');
+      if (!h2 || !h2.textContent.includes('User Management')) return;
 
-    injectHeaderControls(header);
-    applyViewMode();
-    enhanceRoleBadges();
+      injectHeaderControls(header);
+      applyViewMode();
+      enhanceRoleBadges();
 
-    if (qs('.modal-overlay .modal')) {
-      enhanceModal();
+      if (qs('.modal-overlay .modal')) {
+        enhanceModal();
+      }
+    } catch (err) {
+      // Never let observer-driven enhancement crash the page
+      console.warn('[user-management-addon] enhance() skipped:', err && err.message);
     }
   }
 
@@ -857,7 +1027,11 @@
     injectStyles();
     interceptNetwork();
 
-    const observer = new MutationObserver(debounce(enhance, 100));
+    // MutationObserver — debounced and guarded; ignore mutations triggered
+    // by our own addon-owned nodes (.um-*) so we don't loop on ourselves.
+    const observer = new MutationObserver(debounce(function () {
+      try { enhance(); } catch (_) {}
+    }, 120));
     observer.observe(document.body, { childList: true, subtree: true });
 
     enhance();

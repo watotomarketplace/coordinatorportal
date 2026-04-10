@@ -4,10 +4,45 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description"
     content="Watoto Church Celebration Points - Online Learning Progress Dashboard for coordinators and administrators" />
+  <meta name="theme-color" content="#0c0c14" />
   <title>Celebration Points Dashboard | Watoto Church</title>
+
+  <!-- Inline mobile guard: runs BEFORE React hydrates, kills desktop flash -->
+  <style id="wl-mobile-guard-css">
+    @media (max-width: 768px) {
+      /* Hide React root on mobile until we know what route we're on */
+      html.wl-mobile-pending #root { visibility: hidden !important; }
+      /* Once mobile-app.js decides to mount a mobile page, #root stays hidden */
+      body.wl-mobile-mode #root { display: none !important; }
+      /* When the launcher home screen is visible, React dashboard must not bleed through */
+      body.wl-home-active #root { display: none !important; }
+      /* Preload dark backdrop so there's no white flash */
+      html.wl-mobile-pending,
+      html.wl-mobile-pending body {
+        background-color: #0c0c14 !important;
+      }
+    }
+  </style>
+  <script>
+    (function () {
+      // Synchronous mobile detection - runs before React mounts
+      if (window.innerWidth <= 768) {
+        document.documentElement.classList.add('wl-mobile-pending');
+        // Mark mobile mode immediately if not on login/dashboard
+        var p = window.location.pathname;
+        var isLogin = (p === '/login');
+        var isDash = (p === '/' || p === '' || p === '/dashboard');
+        if (!isLogin && !isDash) {
+          // Will be confirmed by mobile-app.js when it runs
+          document.documentElement.dataset.wlMobileRoute = p;
+        }
+      }
+    })();
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -16,19 +51,60 @@
   <script type="module" crossorigin src="/assets/index-BosXJrON.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/vendor-BzMkH_x1.js">
   <link rel="modulepreload" crossorigin href="/assets/utils-Dj1PjNzy.js">
+
+  <!-- Core compiled React CSS -->
   <link rel="stylesheet" crossorigin href="/assets/index--UI4Wz_N.css">
+
+  <!-- Design System v2 (replaces liquid-glass.css) -->
+  <link rel="stylesheet" href="/assets/design-system.css">
+
+  <!-- Mobile UI v2 (replaces mobile-ui.css) -->
+  <link rel="stylesheet" href="/assets/mobile-v2.css">
+
+  <!-- Mobile Page-Specific Layouts -->
+  <link rel="stylesheet" href="/assets/mobile-pages.css">
+
+  <!-- iOS 26 Experience (lock screen, app launcher, transitions) -->
+  <link rel="stylesheet" href="/assets/ios26.css">
+
+  <!-- Mobile-Only App Pages (standalone iOS-native pages for mobile viewports) -->
+  <link rel="stylesheet" href="/assets/mobile-app.css">
 </head>
 
 <body>
   <div id="root"></div>
 
-  <!-- INJECTED: User Management Enhancement (grid/list toggle, search, dual permissions) -->
+  <!-- 1. Icons — FIRST, everything depends on this -->
+  <script src="/assets/icons.js" defer></script>
+
+  <!-- 2. Dashboard fixes (label fixes, chart label fixes) -->
+  <script src="/assets/dashboard-fix.js" defer></script>
+
+  <!-- 3. Chart.js Global Defaults + Plugins -->
+  <script src="/assets/charts-overhaul.js" defer></script>
+
+  <!-- 4. Dashboard Charts (5 chart cards) -->
+  <script src="/assets/dashboard-charts.js" defer></script>
+
+  <!-- 5. User Management Enhancement (grid/list toggle, search, dual permissions) -->
   <script src="/assets/user-management-addon.js" defer></script>
 
-  <!-- INJECTED: Portal Enhancements (dock fix, username lowercase, co-facilitator) -->
+  <!-- 6. Portal Enhancements (username lowercase, co-facilitator, group code) -->
   <script src="/assets/portal-enhancements.js" defer></script>
 
-  <!-- INJECTED: macOS UI Window Controls -->
+  <!-- 7. Interaction Layer v2 (hover highlights, swipe gestures) -->
+  <script src="/assets/interactions.js" defer></script>
+
+  <!-- 8. Mobile UI v2 (tab bar, home screen, control center) -->
+  <script src="/assets/mobile-v2.js" defer></script>
+
+  <!-- 9. iOS 26 Experience (lock screen, app launcher, zoom transitions, app switcher) -->
+  <script src="/assets/ios26.js" defer></script>
+
+  <!-- 10. Mobile-Only App (custom pages that fully replace React UI on mobile) -->
+  <script src="/assets/mobile-app.js" defer></script>
+
+  <!-- macOS Window Controls -->
   <style>
     /* macOS-style window resizing for all modals */
     .modal-overlay .modal,
@@ -41,7 +117,7 @@
       position: relative;
     }
 
-    /* Make SURE buttons are clickable regardless of Title bar drag areas */
+    /* Make traffic light buttons clickable */
     .traffic-btn,
     .traffic-btn.red,
     .traffic-btn.yellow,
@@ -54,80 +130,41 @@
       z-index: 99999 !important;
       position: relative;
     }
-
-    /* Resize handle visual indicator in the bottom right corner */
-    .modal-overlay .modal::after,
-    .settings-modal-window::after {
-      content: '';
-      position: absolute;
-      bottom: 2px;
-      right: 2px;
-      width: 16px;
-      height: 16px;
-      cursor: nwse-resize;
-      background: linear-gradient(135deg, transparent 40%, rgba(255, 255, 255, 0.3) 40%, rgba(255, 255, 255, 0.3) 50%, transparent 50%, transparent 60%, rgba(255, 255, 255, 0.3) 60%, rgba(255, 255, 255, 0.3) 70%, transparent 70%);
-      z-index: 99999;
-      pointer-events: none;
-    }
-
-    /* Maximized state toggled by the Green button */
-    .modal-maximized {
-      width: calc(100vw - 40px) !important;
-      height: calc(100vh - 80px) !important;
-      max-width: none !important;
-      max-height: none !important;
-      border-radius: 12px !important;
-      transition: all 0.3s cubic-bezier(.22, 1, .36, 1);
-    }
-
-    /* Minimized state toggled by the Yellow button */
-    .modal-minimized {
-      transform: scale(0.01) !important;
-      opacity: 0 !important;
-      transition: all 0.4s cubic-bezier(.22, 1, .36, 1);
-      pointer-events: none !important;
-    }
   </style>
 
   <script>
     // Bulletproof click handler for traffic light buttons
     document.addEventListener('click', function (e) {
-      if (!e.isTrusted) return; // ignore script-triggered clicks to prevent loops
+      if (!e.isTrusted) return;
 
-      const el = e.target;
+      var el = e.target;
 
       // 🟢 GREEN: Maximize window
-      // Match classes or the specific inline style used in User Management
       if (el.matches('.traffic-btn.green') || (el.tagName === 'DIV' && el.style.background === 'rgb(39, 201, 63)')) {
         e.stopPropagation();
         e.preventDefault();
-        const modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
+        var modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
         if (modal) modal.classList.toggle('modal-maximized');
         return;
       }
 
       // 🟡 YELLOW: Minimize window
-      // Match classes or the specific inline style
       if (el.matches('.traffic-btn.yellow') || (el.tagName === 'DIV' && el.style.background === 'rgb(255, 189, 46)')) {
         e.stopPropagation();
         e.preventDefault();
-        const overlay = el.closest('.modal-overlay');
-        const modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
+        var overlay = el.closest('.modal-overlay');
+        var modal = el.closest('.settings-modal-window, .modal, .glass-card.modal');
         if (modal) {
           modal.classList.add('modal-minimized');
-          // Wait for animation, then hide the overlay entirely
-          setTimeout(() => { if (overlay) overlay.style.display = 'none'; }, 400);
+          setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 400);
         }
         return;
       }
 
-      // 🔴 RED: Close window (Only intercept if original React handler failed)
-      // Note: React usually handles the red button beautifully, but we'll add a fallback
+      // 🔴 RED: Close window (fallback)
       if (el.matches('.traffic-btn.red') || (el.tagName === 'BUTTON' && el.style.background === 'rgb(255, 95, 86)')) {
-        // We let the event bubble to trigger React's onClose, but just in case it doesn't work:
-        setTimeout(() => {
-          const overlay = el.closest('.modal-overlay');
-          // If the overlay is STILL in the document 100ms later, forcefully hide it
+        setTimeout(function () {
+          var overlay = el.closest('.modal-overlay');
           if (overlay && overlay.isConnected) overlay.style.display = 'none';
         }, 100);
       }

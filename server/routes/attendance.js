@@ -1,31 +1,31 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
+import { requireAuth } from '../middleware/rbac.js'
 import { getPaginatedUsers } from '../services/thinkific.js'
 
 const router = express.Router()
 
-// Auth guard
-router.use((req, res, next) => {
-    if (!req.session?.user) {
-        return res.status(401).json({ success: false, message: 'Not authenticated' })
-    }
-    next()
-})
-
-// Access check helper
+// Access check helper — all authenticated users can read and write attendance
 async function checkGroupAccess(user, groupId, requireWrite = false) {
     if (user.role === 'Admin') return true
-    const group = await dbGet('SELECT facilitator_user_id, celebration_point FROM formation_groups WHERE id = ?', [groupId])
+    const group = await dbGet('SELECT facilitator_user_id, co_facilitator_user_id, celebration_point FROM formation_groups WHERE id = ?', [groupId])
     if (!group) return false
-    if (requireWrite) {
-        if (user.role === 'Facilitator') return group.facilitator_user_id === user.id
-        if (user.role === 'Coordinator') return group.celebration_point === user.celebration_point
-        return false
+
+    // Global roles (Admin, LeadershipTeam) — full access
+    if (['LeadershipTeam'].includes(user.role)) return true
+
+    // Facilitator/CoFacilitator — must be assigned to the group
+    if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+        return group.facilitator_user_id === user.id || group.co_facilitator_user_id === user.id
     }
-    if (['LeadershipTeam', 'TechSupport'].includes(user.role)) return true
-    if (user.role === 'Facilitator') return group.facilitator_user_id === user.id
-    if (['Coordinator', 'Pastor'].includes(user.role)) return group.celebration_point === user.celebration_point
-    return false
+
+    // Campus-scoped roles (Coordinator, TechSupport, Pastor) — must be same campus
+    if (['Coordinator', 'TechSupport', 'Pastor'].includes(user.role)) {
+        return group.celebration_point === user.celebration_point
+    }
+
+    // Any other authenticated user — allow access
+    return true
 }
 
 // Auto-sync group_members from formation_group_members + Thinkific cache.
@@ -96,7 +96,7 @@ async function syncMembersFromFormationGroup(groupId) {
 }
 
 // 1. List active members (auto-syncs roster from formation group first)
-router.get('/group/:groupId/members', async (req, res) => {
+router.get('/group/:groupId/members', requireAuth, async (req, res) => {
     try {
         const { groupId } = req.params
         if (!(await checkGroupAccess(req.session.user, groupId))) {
@@ -115,7 +115,7 @@ router.get('/group/:groupId/members', async (req, res) => {
 })
 
 // 2. List all sessions for a group
-router.get('/group/:groupId/sessions', async (req, res) => {
+router.get('/group/:groupId/sessions', requireAuth, async (req, res) => {
     try {
         const { groupId } = req.params
         if (!(await checkGroupAccess(req.session.user, groupId))) {
@@ -145,7 +145,7 @@ router.get('/group/:groupId/sessions', async (req, res) => {
 })
 
 // 3. Create a new session
-router.post('/group/:groupId/sessions', async (req, res) => {
+router.post('/group/:groupId/sessions', requireAuth, async (req, res) => {
     try {
         const { groupId } = req.params
         const { session_date, week_number, notes, did_not_meet } = req.body
@@ -164,7 +164,7 @@ router.post('/group/:groupId/sessions', async (req, res) => {
 })
 
 // 4. Get session + attendance list
-router.get('/sessions/:sessionId', async (req, res) => {
+router.get('/sessions/:sessionId', requireAuth, async (req, res) => {
     try {
         const { sessionId } = req.params
         const session = await dbGet('SELECT * FROM group_sessions WHERE id = ?', [sessionId])
@@ -187,7 +187,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 })
 
 // 5. Submit check-in attendance (upsert) + backfill weekly_reports
-router.post('/sessions/:sessionId/checkin', async (req, res) => {
+router.post('/sessions/:sessionId/checkin', requireAuth, async (req, res) => {
     try {
         const { sessionId } = req.params
         const { attendance } = req.body // [{ group_member_id, attended, note }]
@@ -222,8 +222,59 @@ router.post('/sessions/:sessionId/checkin', async (req, res) => {
     }
 })
 
+// 6a. Update a session (date, week, notes, did_not_meet)
+router.put('/sessions/:sessionId', requireAuth, async (req, res) => {
+    try {
+        const { sessionId } = req.params
+        const { session_date, week_number, notes, did_not_meet } = req.body
+        const session = await dbGet('SELECT * FROM group_sessions WHERE id = ?', [sessionId])
+        if (!session) return res.status(404).json({ success: false, message: 'Session not found' })
+        if (!(await checkGroupAccess(req.session.user, session.formation_group_id, true))) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+        await dbRun(
+            `UPDATE group_sessions SET
+                session_date = COALESCE(?, session_date),
+                week_number = ?,
+                notes = ?,
+                did_not_meet = ?
+             WHERE id = ?`,
+            [
+                session_date || session.session_date,
+                week_number !== undefined ? week_number : session.week_number,
+                notes !== undefined ? notes : session.notes,
+                did_not_meet !== undefined ? (did_not_meet ? 1 : 0) : session.did_not_meet,
+                sessionId
+            ]
+        )
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Update session error:', error)
+        res.status(500).json({ success: false, message: 'Failed to update session' })
+    }
+})
+
+// 6b. Delete a session (and its attendance records)
+router.delete('/sessions/:sessionId', requireAuth, async (req, res) => {
+    try {
+        const { sessionId } = req.params
+        const session = await dbGet('SELECT * FROM group_sessions WHERE id = ?', [sessionId])
+        if (!session) return res.status(404).json({ success: false, message: 'Session not found' })
+        if (!(await checkGroupAccess(req.session.user, session.formation_group_id, true))) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+        // Delete attendance records first, then the session
+        await dbRun('DELETE FROM session_attendance WHERE session_id = ?', [sessionId])
+        await dbRun('DELETE FROM group_sessions WHERE id = ?', [sessionId])
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Delete session error:', error)
+        res.status(500).json({ success: false, message: 'Failed to delete session' })
+    }
+})
+
 // 6. Attendance summary per member (with streak + history)
-router.get('/group/:groupId/summary', async (req, res) => {
+router.get('/group/:groupId/summary', requireAuth, async (req, res) => {
     try {
         const { groupId } = req.params
         if (!(await checkGroupAccess(req.session.user, groupId))) {
@@ -274,7 +325,7 @@ router.get('/group/:groupId/summary', async (req, res) => {
 })
 
 // 7. Attendance overview dashboard — scoped to user's role/campus
-router.get('/dashboard', async (req, res) => {
+router.get('/dashboard', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
         let whereClause = 'WHERE fg.active = 1'

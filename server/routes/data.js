@@ -63,6 +63,46 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     }
 })
 
+// Get inactive students — dedicated endpoint for "View Inactive Students"
+router.get('/inactive', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const user = req.session.user
+        const campus = req.scopedCelebrationPoint || null
+        const result = await getStudentData(campus)
+
+        const threshold = parseInt(req.query.days) || 14 // Default 14 days
+        let inactive = (result.students || [])
+            .filter(s => s.daysInactive >= threshold)
+            .sort((a, b) => b.daysInactive - a.daysInactive)
+
+        // Facilitator filter — only their group members
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+            const groupMembers = await dbAll(`
+                SELECT fgm.student_id, fgm.student_email FROM formation_group_members fgm
+                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
+                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
+            `, [user.id, user.id])
+            const memberIds = new Set(groupMembers.map(m => String(m.student_id)))
+            const memberEmails = new Set(groupMembers.map(m => m.student_email).filter(Boolean))
+            inactive = inactive.filter(s =>
+                memberIds.has(String(s.userId)) || memberIds.has(String(s.id)) ||
+                memberEmails.has(s.email)
+            )
+        }
+
+        res.json({
+            success: true,
+            students: inactive,
+            total: inactive.length,
+            threshold,
+            lastUpdated: result.lastUpdated
+        })
+    } catch (error) {
+        console.error('Get inactive students error:', error)
+        res.status(500).json({ success: false, message: 'Failed to load inactive students' })
+    }
+})
+
 // Get paginated users (Unified Endpoint)
 router.get('/users', requireAuth, applyCampusScope, async (req, res) => {
     try {

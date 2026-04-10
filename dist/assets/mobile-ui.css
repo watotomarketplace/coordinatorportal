@@ -1,0 +1,1015 @@
+/**
+ * WL101 Portal — iOS 26 Liquid Glass Mobile UI
+ * Complete iOS-native mobile experience matching mobile-ui.js class names.
+ *
+ * Key iOS 26 principles:
+ *   - Large bold navigation titles (SF Pro style)
+ *   - Grouped inset list sections with rounded cards
+ *   - Translucent glass with real blur + saturation
+ *   - Floating pill-shaped tab bar
+ *   - Bottom sheets instead of centered modals
+ *   - 44pt minimum touch targets
+ *   - Full-width content with proper inset padding
+ *   - No desktop chrome visible
+ */
+
+/* ─── iOS 26 Liquid Glass Design Tokens ─────────────────── */
+:root {
+  --lg-regular: rgba(255, 255, 255, 0.12);
+  --lg-thick: rgba(255, 255, 255, 0.18);
+  --lg-thin: rgba(255, 255, 255, 0.06);
+  --lg-ultra-thin: rgba(255, 255, 255, 0.03);
+
+  --lg-specular: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.35) 0%,
+    rgba(255, 255, 255, 0.08) 4%,
+    rgba(255, 255, 255, 0.0) 50%,
+    rgba(255, 255, 255, 0.02) 100%
+  );
+
+  --lg-blur: blur(40px) saturate(200%);
+  --lg-blur-thin: blur(20px) saturate(160%);
+  --lg-blur-thick: blur(60px) saturate(240%);
+
+  --lg-border: 1px solid rgba(255, 255, 255, 0.18);
+  --lg-border-thin: 1px solid rgba(255, 255, 255, 0.10);
+
+  --lg-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
+  --lg-shadow-elevated: 0 8px 48px rgba(0, 0, 0, 0.40);
+
+  --lg-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --lg-spring-bouncy: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --lg-text-primary: rgba(255, 255, 255, 0.95);
+  --lg-text-secondary: rgba(255, 255, 255, 0.60);
+  --lg-text-tertiary: rgba(255, 255, 255, 0.38);
+
+  --lg-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --lg-safe-top: env(safe-area-inset-top, 0px);
+}
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE-ONLY STYLES
+═══════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+/* ─── LOGIN Screen ────────────────────────────────────── */
+body.lg-login-active #lg-tab-bar,
+body.lg-login-active #lg-home-indicator,
+body.lg-login-active .tahoe-menubar,
+body.lg-login-active #lg-ios-nav {
+  display: none !important;
+}
+
+body.lg-login-active {
+  padding: 0 !important;
+}
+
+/* ─── Home Screen ─────────────────────────────────────── */
+#lg-home-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(15, 15, 20, 0.55);
+  backdrop-filter: blur(40px) saturate(260%);
+  -webkit-backdrop-filter: blur(40px) saturate(260%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(var(--lg-safe-top) + 40px) 20px 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.lg-home-active #lg-tab-bar,
+body.lg-home-active #lg-ios-nav {
+  display: none !important;
+}
+
+/* ─── Home Clock ──────────────────────────────────────── */
+.lg-home-time {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.lg-home-clock {
+  font-size: 72px;
+  font-weight: 200;
+  letter-spacing: -3px;
+  color: var(--lg-text-primary);
+  line-height: 1;
+  font-family: -apple-system, 'SF Pro Display', 'Plus Jakarta Sans', sans-serif;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.lg-home-date {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+}
+
+/* ─── Home Greeting ───────────────────────────────────── */
+.lg-home-greeting {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+/* ─── App Grid ────────────────────────────────────────── */
+.lg-app-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px 16px;
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 28px;
+  padding: 0 4px;
+}
+
+.lg-app-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s cubic-bezier(.22, 1, .36, 1);
+}
+
+.lg-app-icon:active {
+  transform: scale(0.88);
+}
+
+.lg-app-icon-img {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  color: white;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Specular highlight on app icons */
+.lg-app-icon-img::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--lg-specular);
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.lg-app-icon-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--lg-text-primary);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* ─── Home Dock ───────────────────────────────────────── */
+.lg-home-dock {
+  position: fixed;
+  bottom: calc(var(--lg-safe-bottom) + 16px);
+  left: 16px;
+  right: 16px;
+  background: rgba(15, 15, 20, 0.55);
+  backdrop-filter: blur(40px) saturate(260%);
+  -webkit-backdrop-filter: blur(40px) saturate(260%);
+  border-radius: 22px;
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  padding: 10px 8px;
+  z-index: 9001;
+  box-shadow: 0 8px 48px rgba(0, 0, 0, 0.40), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.lg-home-dock-scroll {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 4px;
+}
+
+/* Hide scrollbar */
+.lg-home-dock-scroll::-webkit-scrollbar {
+  display: none;
+}
+.lg-home-dock-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.lg-home-dock-icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  scroll-snap-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s var(--lg-spring-bouncy);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: white;
+  position: relative;
+  overflow: hidden;
+}
+
+.lg-home-dock-icon:active {
+  transform: scale(0.82);
+}
+
+.lg-home-dock-icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--lg-specular);
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* ─── Home Indicator ──────────────────────────────────── */
+#lg-home-indicator {
+  position: fixed;
+  bottom: calc(var(--lg-safe-bottom) + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 134px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.35);
+  z-index: 10000;
+  transition: opacity 0.3s ease;
+}
+
+.lg-home-indicator-active {
+  background: rgba(255, 255, 255, 0.60) !important;
+}
+
+/* ─── iOS Navigation Bar ─────────────────────────────── */
+#lg-ios-nav {
+  position: sticky;
+  top: 0;
+  z-index: 8000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(var(--lg-safe-top) + 8px) 16px 8px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: var(--lg-blur-thin);
+  -webkit-backdrop-filter: var(--lg-blur-thin);
+  border-bottom: var(--lg-border-thin);
+  min-height: 44px;
+}
+
+.lg-nav-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #4A9EFF;
+  font-size: 17px;
+  font-weight: 400;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.lg-nav-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+  text-align: center;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 44px;
+  justify-content: flex-end;
+}
+
+.lg-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lg-nav-user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* ─── iOS Large Title ─────────────────────────────────── */
+.lg-ios-large-title {
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--lg-text-primary);
+  letter-spacing: -0.5px;
+  padding: 8px 16px 16px;
+  line-height: 1.1;
+}
+
+/* ─── Role Badge ──────────────────────────────────────── */
+.lg-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: rgba(74, 158, 255, 0.18);
+  color: #4A9EFF;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ─── Tab Bar (In-App Navigation) ─────────────────────── */
+#lg-tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 8500;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  background: rgba(15, 15, 20, 0.55);
+  backdrop-filter: blur(40px) saturate(260%);
+  -webkit-backdrop-filter: blur(40px) saturate(260%);
+  border-top: 0.5px solid rgba(255, 255, 255, 0.15);
+  padding: 6px 0 calc(var(--lg-safe-bottom) + 2px);
+  min-height: 49px;
+}
+
+.lg-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 4px 8px;
+  color: var(--lg-text-tertiary);
+  font-size: 20px;
+  transition: color 0.2s ease;
+  background: none;
+  border: none;
+}
+
+.lg-tab.active {
+  color: #4A9EFF;
+}
+
+.lg-tab-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+/* ─── Control Center ──────────────────────────────────── */
+#lg-control-center {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#lg-control-center.lg-cc-visible {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.lg-cc-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.lg-cc-visible .lg-cc-backdrop {
+  opacity: 1;
+}
+
+.lg-cc-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-height: 85vh;
+  background: rgba(15, 15, 20, 0.55);
+  backdrop-filter: blur(40px) saturate(260%);
+  -webkit-backdrop-filter: blur(40px) saturate(260%);
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  border-top: none;
+  box-shadow: 0 8px 48px rgba(0, 0, 0, 0.40), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  padding: calc(var(--lg-safe-top) + 16px) 20px 24px;
+  transform: translateY(-100%);
+  transition: transform 0.4s var(--lg-spring);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lg-cc-visible .lg-cc-panel {
+  transform: translateY(0);
+}
+
+.lg-cc-handle {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  margin: 0 auto 20px;
+}
+
+/* Control Center - Clock */
+.lg-cc-time {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.lg-cc-clock {
+  font-size: 60px;
+  font-weight: 200;
+  color: var(--lg-text-primary);
+  letter-spacing: -1.5px;
+  line-height: 1;
+  font-family: -apple-system, 'SF Pro Display', 'Plus Jakarta Sans', sans-serif;
+}
+
+.lg-cc-date {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+  margin-top: 4px;
+}
+
+/* Control Center - User Row */
+.lg-cc-user-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  border: var(--lg-border-thin);
+  margin-bottom: 16px;
+}
+
+.lg-cc-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+}
+
+.lg-cc-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lg-cc-user-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-cc-user-role {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+}
+
+/* Control Center - Toggle Grid */
+.lg-cc-toggles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.lg-cc-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  border: var(--lg-border-thin);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s ease, transform 0.15s var(--lg-spring-bouncy);
+}
+
+.lg-cc-toggle:active {
+  transform: scale(0.92);
+}
+
+.lg-cc-toggle.active {
+  background: rgba(74, 158, 255, 0.20);
+  border-color: rgba(74, 158, 255, 0.35);
+}
+
+.lg-cc-toggle-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.lg-cc-toggle-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lg-text-secondary);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* Control Center - Quick Links */
+.lg-cc-quick-links {
+  display: flex;
+  gap: 10px;
+}
+
+.lg-cc-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  border: var(--lg-border-thin);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s ease, transform 0.15s var(--lg-spring-bouncy);
+}
+
+.lg-cc-link:active {
+  transform: scale(0.95);
+}
+
+.lg-cc-link-danger {
+  color: #FF3B30;
+}
+
+/* ─── Dashboard Widgets ───────────────────────────────── */
+.lg-widget {
+  border-radius: 16px !important;
+  overflow: hidden;
+}
+
+.lg-widget .stat-value,
+.lg-widget h3 {
+  font-size: 28px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.5px;
+}
+
+.lg-widget .stat-label,
+.lg-widget .card-title {
+  font-size: 11px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  color: var(--lg-text-secondary) !important;
+}
+
+/* Chart cards span full width */
+.lg-widget.chart-card {
+  grid-column: 1 / -1;
+}
+
+/* ─── Table to Card Conversion ────────────────────────── */
+.lg-table-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px;
+}
+
+.lg-table-card {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: var(--lg-blur-thin);
+  -webkit-backdrop-filter: var(--lg-blur-thin);
+  border-radius: 14px;
+  border: var(--lg-border-thin);
+  padding: 14px 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s ease;
+}
+
+.lg-table-card:active {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.lg-table-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.lg-table-field + .lg-table-field {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lg-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+}
+
+.lg-field-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+  text-align: right;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Pull to Refresh ─────────────────────────────────── */
+.lg-ptr-indicator {
+  position: fixed;
+  top: calc(var(--lg-safe-top) + 52px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.6);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(28, 28, 36, 0.85);
+  backdrop-filter: var(--lg-blur-thin);
+  -webkit-backdrop-filter: var(--lg-blur-thin);
+  border: var(--lg-border-thin);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 8100;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.lg-ptr-indicator.visible {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+.lg-ptr-indicator.refreshing {
+  animation: lg-ptr-spin 0.8s linear infinite;
+}
+
+@keyframes lg-ptr-spin {
+  from { transform: translateX(-50%) scale(1) rotate(0deg); }
+  to   { transform: translateX(-50%) scale(1) rotate(360deg); }
+}
+
+/* ─── Swipe-to-Dismiss Bottom Sheets ──────────────────── */
+.modal-overlay .modal,
+.modal-overlay .glass-card.modal {
+  transition: transform 0.35s var(--lg-spring);
+  touch-action: pan-y;
+}
+
+/* ─── Chart Drill-Down Modal ──────────────────────────── */
+.lg-drilldown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9200;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.lg-drilldown-overlay.lg-drilldown-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.lg-drilldown-sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 80vh;
+  background: var(--glass-layer-4, rgba(28, 28, 36, 0.92));
+  backdrop-filter: var(--lg-blur-thick);
+  -webkit-backdrop-filter: var(--lg-blur-thick);
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+  border: var(--lg-border);
+  border-bottom: none;
+  box-shadow: var(--lg-shadow-elevated);
+  padding: 0 0 calc(var(--lg-safe-bottom) + 16px);
+  transform: translateY(100%);
+  transition: transform 0.4s var(--lg-spring);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lg-drilldown-visible .lg-drilldown-sheet {
+  transform: translateY(0);
+}
+
+.lg-drilldown-handle {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  margin: 8px auto 14px;
+}
+
+.lg-drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.lg-drilldown-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+}
+
+.lg-drilldown-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--lg-text-secondary);
+}
+
+.lg-drilldown-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: var(--lg-text-secondary);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lg-drilldown-list {
+  padding: 8px 16px;
+}
+
+.lg-drilldown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  min-height: 44px;
+}
+
+.lg-drilldown-student-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.lg-drilldown-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--lg-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-drilldown-meta {
+  font-size: 12px;
+  color: var(--lg-text-tertiary);
+}
+
+.lg-drilldown-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.lg-drilldown-progress {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--lg-text-primary);
+}
+
+.lg-drilldown-risk {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ─── Sectioned Admin/Group Grids ─────────────────────── */
+.lg-sectioned {
+  padding: 0 16px;
+}
+
+/* ─── Settings Sidebar (Horizontal Pill Tabs) ─────────── */
+.settings-sidebar,
+[class*="settings-nav"],
+[class*="settings-tabs"] {
+  display: flex !important;
+  flex-direction: row !important;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  gap: 8px;
+  padding: 8px 16px;
+  flex-wrap: nowrap;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-sidebar button,
+.settings-sidebar a,
+[class*="settings-nav"] button,
+[class*="settings-tabs"] button {
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  padding: 8px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  border: var(--lg-border-thin);
+  color: var(--lg-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  min-height: 36px;
+}
+
+.settings-sidebar button.active,
+.settings-sidebar a.active,
+[class*="settings-nav"] button.active,
+[class*="settings-tabs"] button.active {
+  background: rgba(74, 158, 255, 0.18);
+  color: #4A9EFF;
+  border-color: rgba(74, 158, 255, 0.35);
+}
+
+/* ─── Body overrides ──────────────────────────────────── */
+body.overflow-hidden {
+  overflow: hidden !important;
+}
+
+/* ─── Page Content Safe Area ──────────────────────────── */
+.page-content,
+.main-content,
+.view-container,
+.page-container,
+.tahoe-page {
+  padding-bottom: calc(80px + var(--lg-safe-bottom)) !important;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* ─── Hide Desktop Chrome on Mobile ───────────────────── */
+.tahoe-menubar,
+.user-profile,
+nav:not(#lg-ios-nav):not(#lg-tab-bar) {
+  display: none !important;
+}
+
+/* ─── Mobile Touch Targets ────────────────────────────── */
+button, a, [role="button"],
+.clickable, .list-row, .nav-item {
+  min-height: 44px;
+}
+
+input, select, textarea {
+  min-height: 48px;
+  font-size: 16px; /* prevents iOS zoom */
+}
+
+/* ─── Modal Bottom Sheets (iOS 26 Floating) ───────────── */
+.modal-overlay .modal,
+.modal-overlay .glass-card.modal {
+  position: fixed !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  top: auto !important;
+  width: calc(100% - 16px) !important;
+  max-width: none !important;
+  max-height: 85vh !important;
+  margin: 0 8px calc(8px + var(--lg-safe-bottom)) !important;
+  border-radius: 22px !important;
+  background: var(--glass-layer-4, rgba(28, 28, 36, 0.92)) !important;
+  backdrop-filter: var(--lg-blur-thick) !important;
+  -webkit-backdrop-filter: var(--lg-blur-thick) !important;
+  box-shadow: var(--lg-shadow-elevated) !important;
+  border: var(--lg-border) !important;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  transform: none !important;
+}
+
+.modal-overlay {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.3) !important;
+}
+
+/* ─── Light Theme ─────────────────────────────────────── */
+body.light-theme {
+  --lg-regular: rgba(0, 0, 0, 0.06);
+  --lg-thick: rgba(0, 0, 0, 0.10);
+  --lg-thin: rgba(0, 0, 0, 0.04);
+  --lg-text-primary: rgba(0, 0, 0, 0.90);
+  --lg-text-secondary: rgba(0, 0, 0, 0.55);
+  --lg-text-tertiary: rgba(0, 0, 0, 0.35);
+  --lg-border: 1px solid rgba(0, 0, 0, 0.12);
+  --lg-border-thin: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+body.light-theme #lg-tab-bar {
+  background: rgba(245, 245, 250, 0.80);
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-theme .lg-cc-panel {
+  background: rgba(245, 245, 250, 0.92);
+}
+
+body.light-theme .lg-home-dock {
+  background: rgba(245, 245, 250, 0.80);
+}
+
+/* ─── Reduced Motion ──────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+} /* end @media (max-width: 768px) */

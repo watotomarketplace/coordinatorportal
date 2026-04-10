@@ -1,0 +1,1219 @@
+/**
+ * WL101 Portal — Mobile UI v2
+ * 
+ * REPLACES: mobile-ui.css
+ * 
+ * Principles:
+ *   - Native mobile patterns (bottom tab bar, top app bar)
+ *   - NO dock on mobile
+ *   - Opaque content surfaces, glass only for tab bar/overlays
+ *   - Progressive disclosure for data-dense content
+ *   - Thumb-friendly touch targets
+ *   - Proper safe areas
+ */
+
+/* ─── Mobile Tokens ──────────────────────────────────── */
+:root {
+  --m-tab-height: 56px;
+  --m-nav-height: 52px;
+  --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --m-safe-top: env(safe-area-inset-top, 0px);
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE-ONLY STYLES (< 768px)
+   ═══════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+/* ─── Hide Desktop Chrome ────────────────────────────── */
+.tahoe-menubar,
+.dock,
+.dock-container,
+.user-profile,
+nav:not(#wl-ios-nav):not(#wl-tab-bar):not([role="tablist"]) {
+  display: none !important;
+}
+
+/* ─── CHANGE 1: Strip macOS Window Chrome ────────────── */
+/* Hide traffic light buttons, window title bars, resize handles */
+.traffic-lights,
+.traffic-btn,
+.traffic-btn.red,
+.traffic-btn.yellow,
+.traffic-btn.green,
+[class*="traffic-light"],
+[class*="window-controls"],
+[class*="window-title-bar"],
+[class*="titlebar"],
+.modal-titlebar .traffic-lights,
+button[style*="background:#ff5f56"],
+div[style*="background:#ffbd2e"],
+div[style*="background:#27c93f"],
+div[style*="background: rgb(255, 95, 86)"],
+div[style*="background: rgb(255, 189, 46)"],
+div[style*="background: rgb(39, 201, 63)"] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Hide resize handles on all modals */
+.modal-overlay .modal,
+.settings-modal-window,
+.modal-overlay .glass-card.modal {
+  resize: none !important;
+}
+
+/* Strip any desktop window decorations from settings modal */
+.settings-modal-window .traffic-lights,
+.settings-modal-window [class*="traffic"],
+.modal .traffic-lights,
+.modal [class*="traffic"] {
+  display: none !important;
+}
+
+/* Hide macOS-style drag regions */
+[style*="-webkit-app-region: drag"],
+[style*="app-region: drag"] {
+  -webkit-app-region: no-drag !important;
+}
+
+
+/* ─── LOGIN Screen ───────────────────────────────────── */
+body.wl-login-active #wl-tab-bar,
+body.wl-login-active #wl-home-indicator,
+body.wl-login-active #wl-ios-nav {
+  display: none !important;
+}
+
+body.wl-login-active {
+  padding: 0 !important;
+}
+
+
+/* ─── CHANGE 8: Enhanced iOS Navigation Bar ──────────── */
+#wl-ios-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-dock, 8000);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(var(--m-safe-top) + 8px) 16px 10px;
+  background: rgba(15, 15, 22, 0.72);
+  backdrop-filter: blur(40px) saturate(220%);
+  -webkit-backdrop-filter: blur(40px) saturate(220%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: var(--m-nav-height);
+  /* Liquid glass inset highlight */
+  box-shadow:
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: background 0.3s ease, backdrop-filter 0.3s ease;
+}
+
+/* Scrolled state — more opaque */
+#wl-ios-nav.wl-nav-scrolled {
+  background: rgba(15, 15, 22, 0.88);
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.wl-nav-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent, #6366f1);
+  font-size: 17px;
+  font-weight: 400;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.wl-nav-back svg {
+  width: 20px;
+  height: 20px;
+}
+
+.wl-nav-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wl-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 44px;
+  justify-content: flex-end;
+}
+
+.wl-nav-user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border-default);
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.wl-nav-user-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+
+/* ─── iOS Large Title ────────────────────────────────── */
+.wl-large-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
+  padding: 4px 16px 14px;
+  line-height: 1.15;
+}
+
+
+/* ─── CHANGE 7: Enhanced Bottom Tab Bar ──────────────── */
+#wl-tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-dock, 8000);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  background: rgba(15, 15, 22, 0.68);
+  backdrop-filter: blur(40px) saturate(220%);
+  -webkit-backdrop-filter: blur(40px) saturate(220%);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 6px 0 calc(var(--m-safe-bottom) + 4px);
+  min-height: var(--m-tab-height);
+  /* Liquid glass inset highlights */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
+}
+
+.wl-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 4px 14px;
+  color: var(--text-tertiary);
+  transition: color 0.2s ease, transform 0.15s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1));
+  background: none;
+  border: none;
+  font-family: inherit;
+  position: relative;
+}
+
+.wl-tab:active {
+  transform: scale(0.88);
+}
+
+.wl-tab svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 1.8;
+  transition: transform 0.2s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1));
+}
+
+.wl-tab.active {
+  color: var(--accent, #6366f1);
+}
+
+/* Active tab indicator dot */
+.wl-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent, #6366f1);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.5);
+}
+
+.wl-tab.active svg {
+  transform: scale(1.1);
+}
+
+.wl-tab-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+
+/* ─── Role Badge ─────────────────────────────────────── */
+.wl-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--r-full, 999px);
+  background: var(--accent-muted, rgba(99,102,241,0.15));
+  color: var(--accent, #6366f1);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+
+/* ─── CHANGE 3: Hide React Page Titles When iOS Nav Active ── */
+/* Prevent duplicate title display — iOS nav shows title, hide React's */
+body:not(.wl-login-active) .page-container > h1:first-of-type,
+body:not(.wl-login-active) .page-container > h2:first-of-type,
+body:not(.wl-login-active) .tahoe-page > h1:first-of-type,
+body:not(.wl-login-active) .tahoe-page > h2:first-of-type,
+body:not(.wl-login-active) [class*="page-header"] h1,
+body:not(.wl-login-active) [class*="page-header"] h2,
+body:not(.wl-login-active) [class*="PageHeader"] h1,
+body:not(.wl-login-active) [class*="page-title"],
+body:not(.wl-login-active) [class*="pageTitle"] {
+  display: none !important;
+}
+
+/* But keep titles on dashboard (no iOS nav there) */
+body.wl-home-active .page-container > h1:first-of-type,
+body.wl-home-active .page-container > h2:first-of-type {
+  display: block !important;
+}
+
+
+/* ─── CHANGE 4: Glass Stat Cards ────────────────────── */
+.stat-card,
+.glass-card.stat-card {
+  padding: 16px 18px !important;
+  border-radius: var(--r-lg, 16px) !important;
+  background: rgba(30, 30, 50, 0.65) !important;
+  backdrop-filter: blur(24px) saturate(200%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(200%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.03) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Specular highlight on stat cards */
+.stat-card::before,
+.glass-card.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.02) 40%,
+    transparent 100%);
+  pointer-events: none;
+  border-radius: var(--r-lg, 16px) var(--r-lg, 16px) 0 0;
+  z-index: 1;
+}
+
+/* Ensure content sits above specular */
+.stat-card > *,
+.glass-card.stat-card > * {
+  position: relative;
+  z-index: 2;
+}
+
+.stat-value {
+  font-size: 26px !important;
+  letter-spacing: -0.5px;
+  font-weight: 700 !important;
+}
+
+.stat-label {
+  font-size: 11px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+
+/* ─── Dashboard Widgets ──────────────────────────────── */
+.wl-widget .stat-value,
+.wl-widget h3 {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.5px;
+}
+
+.wl-widget .stat-label,
+.wl-widget .card-title {
+  font-size: 11px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  color: var(--text-secondary) !important;
+}
+
+/* Chart cards span full width on mobile */
+.wl-widget.chart-card {
+  grid-column: 1 / -1;
+}
+
+
+/* ─── Charts Section Full Width ──────────────────────── */
+.charts-section {
+  grid-template-columns: 1fr !important;
+  gap: 12px !important;
+}
+
+.wl101-chart-card {
+  border-radius: var(--r-lg, 16px) !important;
+}
+
+.wl101-chart-card canvas {
+  max-height: 180px !important;
+}
+
+
+/* ─── Table → Card Conversion ────────────────────────── */
+.wl-table-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px;
+}
+
+.wl-table-card {
+  background: var(--bg-secondary, #1c1c2a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--r-md, 12px);
+  padding: 14px 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease;
+}
+
+.wl-table-card:active {
+  background: var(--bg-tertiary, #242436);
+}
+
+.wl-table-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.wl-table-field + .wl-table-field {
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+}
+
+.wl-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.wl-field-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* ─── Control Center (Pull-down Menu) ────────────────── */
+#wl-control-center {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#wl-control-center.wl-cc-visible {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.wl-cc-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.wl-cc-visible .wl-cc-backdrop {
+  opacity: 1;
+}
+
+.wl-cc-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-height: 85vh;
+  background: var(--bg-elevated, #2a2a40);
+  border-bottom-left-radius: var(--r-xl, 20px);
+  border-bottom-right-radius: var(--r-xl, 20px);
+  border: 1px solid var(--border-default, rgba(255,255,255,0.10));
+  border-top: none;
+  box-shadow: var(--shadow-xl);
+  padding: calc(var(--m-safe-top) + 16px) 20px 24px;
+  transform: translateY(-100%);
+  transition: transform 0.4s var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.wl-cc-visible .wl-cc-panel {
+  transform: translateY(0);
+}
+
+.wl-cc-handle {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--text-muted);
+  margin: 0 auto 20px;
+}
+
+/* CC Clock */
+.wl-cc-clock {
+  font-size: 54px;
+  font-weight: 200;
+  color: var(--text-primary);
+  letter-spacing: -1px;
+  line-height: 1;
+  text-align: center;
+}
+
+.wl-cc-date {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  margin-top: 4px;
+  margin-bottom: 20px;
+}
+
+/* CC User Row */
+.wl-cc-user-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 16px;
+}
+
+.wl-cc-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border-default);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.wl-cc-user-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wl-cc-user-role {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* CC Toggle Grid */
+.wl-cc-toggles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.wl-cc-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 6px;
+  background: var(--bg-tertiary);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease;
+}
+
+.wl-cc-toggle:active {
+  transform: scale(0.94);
+}
+
+.wl-cc-toggle.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+
+.wl-cc-toggle-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.wl-cc-toggle-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+/* CC Quick Links */
+.wl-cc-quick-links {
+  display: flex;
+  gap: 10px;
+}
+
+.wl-cc-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease;
+}
+
+.wl-cc-link:active {
+  transform: scale(0.96);
+}
+
+.wl-cc-link-danger {
+  color: var(--danger, #FF453A);
+}
+
+
+/* ─── Chart Drill-Down Bottom Sheet ──────────────────── */
+.wl-drilldown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9200;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.wl-drilldown-overlay.wl-drilldown-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.wl-drilldown-sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 80vh;
+  background: var(--bg-elevated, #2a2a40);
+  border-top-left-radius: var(--r-xl, 20px);
+  border-top-right-radius: var(--r-xl, 20px);
+  border: 1px solid var(--border-default);
+  border-bottom: none;
+  box-shadow: var(--shadow-xl);
+  padding: 0 0 calc(var(--m-safe-bottom) + 16px);
+  transform: translateY(100%);
+  transition: transform 0.4s var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.wl-drilldown-visible .wl-drilldown-sheet {
+  transform: translateY(0);
+}
+
+.wl-drilldown-handle {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--text-muted);
+  margin: 8px auto 14px;
+}
+
+.wl-drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wl-drilldown-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wl-drilldown-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.wl-drilldown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: 48px;
+}
+
+.wl-drilldown-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wl-drilldown-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.wl-drilldown-progress {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+
+/* ─── Pull to Refresh ────────────────────────────────── */
+.wl-ptr-indicator {
+  position: fixed;
+  top: calc(var(--m-safe-top) + 52px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.6);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 8100;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+}
+
+.wl-ptr-indicator.visible {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+.wl-ptr-indicator.refreshing {
+  animation: wl-ptr-spin 0.8s linear infinite;
+}
+
+@keyframes wl-ptr-spin {
+  from { transform: translateX(-50%) scale(1) rotate(0deg); }
+  to   { transform: translateX(-50%) scale(1) rotate(360deg); }
+}
+
+
+/* ─── Home Indicator ─────────────────────────────────── */
+#wl-home-indicator {
+  position: fixed;
+  bottom: calc(var(--m-safe-bottom) + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 134px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--text-muted);
+  z-index: 10000;
+  transition: opacity 0.3s ease;
+}
+
+
+/* ─── Modal Bottom Sheets ────────────────────────────── */
+.modal-overlay .modal,
+.modal-overlay .glass-card.modal {
+  position: fixed !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  top: auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  max-height: 90vh !important;
+  margin: 0 !important;
+  border-radius: var(--r-xl, 20px) var(--r-xl, 20px) 0 0 !important;
+  background: var(--bg-elevated, #2a2a40) !important;
+  border: 1px solid var(--border-default) !important;
+  border-bottom: none !important;
+  box-shadow: var(--shadow-xl) !important;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: wl-sheet-up 0.4s var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+@keyframes wl-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.modal-overlay {
+  background: rgba(0, 0, 0, 0.4) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* Remove resize handle on mobile */
+.modal-overlay .modal::after,
+.settings-modal-window::after {
+  display: none !important;
+}
+
+
+/* ─── Settings Sidebar → Horizontal Pills ────────────── */
+.settings-sidebar,
+[class*="settings-nav"],
+[class*="settings-tabs"] {
+  display: flex !important;
+  flex-direction: row !important;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  gap: 8px;
+  padding: 8px 16px;
+  flex-wrap: nowrap;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-sidebar button,
+.settings-sidebar a,
+[class*="settings-nav"] button,
+[class*="settings-tabs"] button {
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  padding: 8px 16px;
+  border-radius: var(--r-full, 999px);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  min-height: 36px;
+}
+
+.settings-sidebar button.active,
+[class*="settings-nav"] button.active,
+[class*="settings-tabs"] button.active {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+
+/* ─── Page Content Safe Area ─────────────────────────── */
+.page-content,
+.main-content,
+.view-container,
+.page-container,
+.tahoe-page {
+  padding-bottom: calc(var(--m-tab-height) + var(--m-safe-bottom) + 16px) !important;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+
+/* ─── Disable Desktop Card Hover on Touch ────────────── */
+.glass-card:hover,
+.stat-card:hover,
+.group-card:hover,
+.user-card:hover {
+  transform: none !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* Keep press feedback */
+.glass-card:active,
+.stat-card:active,
+.group-card:active,
+.user-card:active {
+  transform: scale(0.97) !important;
+  transition-duration: 0.08s;
+}
+
+
+/* ─── Body overflow state ────────────────────────────── */
+body.overflow-hidden {
+  overflow: hidden !important;
+}
+
+
+/* ─── Light Theme ────────────────────────────────────── */
+body.light-theme #wl-tab-bar {
+  background: rgba(245, 245, 250, 0.88);
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-theme .wl-cc-panel {
+  background: rgba(245, 245, 250, 0.95);
+}
+
+
+/* ─── Reduced Motion ─────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+/* ─── Home Screen (App Grid — on dashboard mobile) ──── */
+#wl-home-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  /* Wallpaper shines through from body, add a subtle dark gradient scrim */
+  background:
+    linear-gradient(180deg,
+      rgba(10, 10, 20, 0.35) 0%,
+      rgba(10, 10, 20, 0.2) 40%,
+      rgba(10, 10, 20, 0.55) 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(var(--m-safe-top) + 32px) 20px 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  backdrop-filter: saturate(110%);
+  -webkit-backdrop-filter: saturate(110%);
+}
+
+body.wl-home-active #wl-tab-bar,
+body.wl-home-active #wl-ios-nav {
+  display: none !important;
+}
+
+/* Home Clock */
+.wl-home-time {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.wl-home-clock {
+  font-size: 56px;
+  font-weight: 200;
+  letter-spacing: -2px;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.wl-home-date {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.wl-home-greeting {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+/* App Grid */
+.wl-app-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px 16px;
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 28px;
+  padding: 0 4px;
+}
+
+.wl-app-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wl-app-icon:active .wl-app-icon-img {
+  transform: scale(0.88);
+}
+
+.wl-app-icon-img {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: white;
+  transition: transform 0.12s var(--ease-out);
+}
+
+.wl-app-icon-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* ─── Sectioned Admin/Group Grids ────────────────────── */
+.wl-sectioned {
+  padding: 0 16px;
+}
+
+
+/* ─── Swipe Back Indicator ───────────────────────────── */
+#wl-swipe-back-indicator {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) translateX(-100%);
+  width: 24px;
+  height: 60px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 0 12px 12px 0;
+  z-index: 99998;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.2s var(--ease-out);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#wl-swipe-back-indicator.wl-swipe-active {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+#wl-swipe-back-indicator::after {
+  content: '\276E';
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+
+/* ─── CHANGE 2: Clock Visibility — Home Screen Only ──── */
+/* Clock is visible on home screen, hidden elsewhere */
+.wl-home-clock {
+  font-size: 56px;
+  font-weight: 200;
+  letter-spacing: -2px;
+  color: var(--text-primary);
+  line-height: 1;
+  -webkit-text-stroke: 0.3px rgba(255, 255, 255, 0.7);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Hide home screen elements when not on dashboard */
+body:not(.wl-home-active) #wl-home-screen {
+  display: none !important;
+}
+
+
+/* ─── CHANGE 6: Liquid Glass CSS Effects ─────────────── */
+/* SVG filter for frosted glass distortion */
+.wl-lg-filter {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Liquid glass shimmer on glass surfaces */
+@keyframes wl-lg-shimmer {
+  0% { background-position: -200% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* Apply to tab bar and nav bar for subtle material effect */
+#wl-tab-bar::before,
+#wl-ios-nav::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.03) 38%,
+    rgba(255, 255, 255, 0.06) 42%,
+    rgba(255, 255, 255, 0.03) 46%,
+    transparent 54%
+  );
+  background-size: 200% 100%;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+/* Glass surface common treatment for modals and sheets */
+.modal-overlay .modal::before,
+.wl-drilldown-sheet::before,
+.wl-cc-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.12) 20%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.12) 80%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Edge highlight on glass cards */
+.glass-card::before,
+.group-card::before,
+.user-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(255, 255, 255, 0.15),
+    transparent
+  );
+  pointer-events: none;
+  z-index: 3;
+}
+
+.glass-card,
+.group-card,
+.user-card {
+  position: relative;
+  overflow: hidden;
+}
+
+
+} /* end @media (max-width: 768px) */
+
+
+/* ═══════════════════════════════════════════════════════
+   TABLET-ONLY STYLES (641px - 1024px)
+   ═══════════════════════════════════════════════════════ */
+@media (min-width: 641px) and (max-width: 1024px) {
+  /* Tablet gets a dock but with reduced presence */
+  .dock,
+  .dock-container {
+    padding: var(--s-2, 8px) var(--s-3, 12px) !important;
+    border-radius: var(--r-lg, 16px) !important;
+    bottom: var(--s-2, 8px) !important;
+  }
+
+  /* Stat cards in pairs */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Charts single column */
+  .charts-section {
+    grid-template-columns: 1fr !important;
+  }
+}

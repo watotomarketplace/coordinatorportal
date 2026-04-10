@@ -65,7 +65,7 @@ router.get('/campus/roster', requireAuth, applyCampusScope, async (req, res) => 
         const data = await getStudentData(campus || null)
         const students = data.students || []
 
-        const columns = ['id', 'first_name', 'last_name', 'email', 'celebration_point', 'percentage_completed', 'days_since_last_sign_in', 'amount_spent', 'risk_score', 'enrolled_at', 'last_sign_in_at']
+        const columns = ['userId', 'first_name', 'last_name', 'email', 'celebration_point', 'course', 'progress', 'status', 'daysInactive', 'alertLevel', 'risk_score', 'risk_category', 'lastActivity', 'last_sign_in_at', 'enrolled_at']
         sendCSV(res, `roster_${campus || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, students, columns)
     } catch (error) {
         console.error('Export roster error:', error)
@@ -82,10 +82,10 @@ router.get('/campus/risk', requireAuth, applyCampusScope, async (req, res) => {
         const campus = req.query.celebration_point || req.scopedCelebrationPoint || user.celebration_point
         const data = await getStudentData(campus || null)
         const atRisk = (data.students || []).filter(s =>
-            (s.risk_score && s.risk_score >= 50) || s.days_since_last_sign_in > 14
+            (s.risk_score && s.risk_score >= 50) || s.daysInactive > 14
         ).sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
 
-        const columns = ['id', 'first_name', 'last_name', 'email', 'celebration_point', 'risk_score', 'days_since_last_sign_in', 'percentage_completed', 'last_sign_in_at']
+        const columns = ['userId', 'first_name', 'last_name', 'email', 'celebration_point', 'course', 'progress', 'status', 'risk_score', 'risk_category', 'daysInactive', 'alertLevel', 'lastActivity', 'last_sign_in_at', 'enrolled_at']
         sendCSV(res, `risk_report_${campus || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, atRisk, columns)
     } catch (error) {
         console.error('Export risk error:', error)
@@ -195,16 +195,33 @@ router.get('/group/:groupId/roster', requireAuth, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
         }
 
-        const members = await dbAll(`
-            SELECT fgm.student_id, s.first_name, s.last_name, s.email,
-                s.percentage_completed, s.days_since_last_sign_in, s.last_sign_in_at, s.risk_score
-            FROM formation_group_members fgm
-            LEFT JOIN students s ON fgm.student_id = s.id
-            WHERE fgm.formation_group_id = ?
-        `, [req.params.groupId])
+        // Get group members from DB (student_id + cached name/email)
+        const members = await dbAll(`SELECT student_id, student_name, student_email
+            FROM formation_group_members WHERE formation_group_id = ?`, [req.params.groupId])
 
-        const columns = ['student_id', 'first_name', 'last_name', 'email', 'percentage_completed', 'days_since_last_sign_in', 'last_sign_in_at', 'risk_score']
-        sendCSV(res, `group_roster_${group.group_code}_${new Date().toISOString().slice(0, 10)}.csv`, members, columns)
+        // Enrich with live Thinkific data from cache
+        const thinkificData = await getStudentData()
+        const studentMap = new Map((thinkificData.students || []).map(s => [String(s.userId), s]))
+
+        const enriched = members.map(m => {
+            const s = studentMap.get(String(m.student_id))
+            return {
+                student_id: m.student_id,
+                first_name: s?.first_name || (m.student_name || '').split(' ')[0] || '',
+                last_name: s?.last_name || (m.student_name || '').split(' ').slice(1).join(' ') || '',
+                email: s?.email || m.student_email || '',
+                progress: s?.progress ?? 0,
+                status: s?.status || 'Unknown',
+                daysInactive: s?.daysInactive ?? 0,
+                risk_score: s?.risk_score ?? 0,
+                risk_category: s?.risk_category || 'Unknown',
+                lastActivity: s?.lastActivity || '',
+                last_sign_in_at: s?.last_sign_in_at || ''
+            }
+        })
+
+        const columns = ['student_id', 'first_name', 'last_name', 'email', 'progress', 'status', 'daysInactive', 'risk_score', 'risk_category', 'lastActivity', 'last_sign_in_at']
+        sendCSV(res, `group_roster_${group.group_code}_${new Date().toISOString().slice(0, 10)}.csv`, enriched, columns)
     } catch (error) {
         console.error('Export group roster error:', error)
         res.status(500).json({ success: false, message: 'Export failed' })
@@ -273,6 +290,75 @@ router.get('/group/:groupId/formation-evidence', requireAuth, async (req, res) =
     } catch (error) {
         console.error('Export group formation evidence error:', error)
         res.status(500).json({ success: false, message: 'Export failed' })
+    }
+})
+
+// ═══════════════════════════════════════════════════════
+// ATTENDANCE + CHECKPOINTS CSV EXPORTS
+// ═══════════════════════════════════════════════════════
+
+// 9. Attendance Export
+router.get('/attendance', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const user = req.session.user
+        const campus = req.query.celebration_point || req.scopedCelebrationPoint || user.celebration_point
+        const group_id = req.query.group_id
+
+        const { where, params } = buildFilters(user, campus)
+        const groupFilter = group_id ? 'AND fg.id = ?' : ''
+        if (group_id) params.push(group_id)
+
+        const rows = await dbAll(`
+            SELECT fg.group_code, fg.celebration_point,
+                   gs.session_date, gs.week_number,
+                   gm.student_name, gm.student_email,
+                   sa.attended, sa.note
+            FROM session_attendance sa
+            JOIN group_sessions gs ON sa.session_id = gs.id
+            JOIN group_members gm ON sa.group_member_id = gm.id
+            JOIN formation_groups fg ON gs.formation_group_id = fg.id
+            WHERE 1=1 ${where} ${groupFilter}
+            ORDER BY fg.group_code, gs.session_date, gm.student_name
+        `, params)
+
+        const columns = ['group_code', 'celebration_point', 'session_date', 'week_number', 'student_name', 'student_email', 'attended', 'note']
+        sendCSV(res, `attendance_${campus || 'all'}_${Date.now()}.csv`, rows, columns)
+    } catch (err) {
+        console.error('Attendance export error:', err)
+        res.status(500).json({ success: false, message: 'Attendance export failed' })
+    }
+})
+
+// 10. Checkpoints CSV Export
+router.get('/checkpoints-csv', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const user = req.session.user
+        const campus = req.query.celebration_point || req.scopedCelebrationPoint || user.celebration_point
+        const week = req.query.week
+
+        const { where, params } = buildFilters(user, campus)
+        const weekFilter = week ? 'AND dc.checkpoint_week = ?' : ''
+        if (week) params.push(week)
+
+        const rows = await dbAll(`
+            SELECT fg.group_code, fg.celebration_point,
+                   u.name as facilitator_name,
+                   dc.checkpoint_week, dc.status,
+                   dc.attendance_trend, dc.engagement_trend,
+                   dc.summary, dc.concerns_summary as pastoral_concerns,
+                   dc.created_at
+            FROM discernment_checkpoints dc
+            JOIN formation_groups fg ON dc.formation_group_id = fg.id
+            LEFT JOIN users u ON fg.facilitator_user_id = u.id
+            WHERE 1=1 ${where} ${weekFilter}
+            ORDER BY dc.checkpoint_week, fg.group_code
+        `, params)
+
+        const columns = ['group_code', 'celebration_point', 'facilitator_name', 'checkpoint_week', 'status', 'attendance_trend', 'engagement_trend', 'summary', 'pastoral_concerns', 'created_at']
+        sendCSV(res, `checkpoints_week${week || 'all'}_${Date.now()}.csv`, rows, columns)
+    } catch (err) {
+        console.error('Checkpoints export error:', err)
+        res.status(500).json({ success: false, message: 'Checkpoints export failed' })
     }
 })
 

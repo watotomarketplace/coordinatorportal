@@ -1,20 +1,12 @@
 import express from 'express'
-import { requireAuth } from '../middleware/rbac.js'
+import { requireAuth, requireAdminOrTechSupport } from '../middleware/rbac.js'
 import { updateUserName, resetUserPassword, getThinkificUser } from '../services/thinkific-writeback.js'
 import { dbAll } from '../db/init.js'
 
 const router = express.Router()
 
-// Only Admin and TechSupport can access write-back functions
-function requireTechAccess(req, res, next) {
-    if (!['Admin', 'TechSupport'].includes(req.session.user?.role)) {
-        return res.status(403).json({ success: false, message: 'Tech Support or Admin access required' })
-    }
-    next()
-}
-
 // --- LOOK UP THINKIFIC USER ---
-router.get('/lookup/:thinkificId', requireAuth, requireTechAccess, async (req, res) => {
+router.get('/lookup/:thinkificId', requireAuth, requireAdminOrTechSupport, async (req, res) => {
     try {
         const result = await getThinkificUser(req.params.thinkificId)
         res.json(result)
@@ -25,7 +17,7 @@ router.get('/lookup/:thinkificId', requireAuth, requireTechAccess, async (req, r
 })
 
 // --- UPDATE NAME ---
-router.put('/name/:thinkificId', requireAuth, requireTechAccess, async (req, res) => {
+router.put('/name/:thinkificId', requireAuth, requireAdminOrTechSupport, async (req, res) => {
     try {
         const { first_name, last_name } = req.body
         if (!first_name && !last_name) {
@@ -61,7 +53,7 @@ router.put('/name/:thinkificId', requireAuth, requireTechAccess, async (req, res
 })
 
 // --- PASSWORD RESET ---
-router.post('/reset-password/:thinkificId', requireAuth, requireTechAccess, async (req, res) => {
+router.post('/reset-password/:thinkificId', requireAuth, requireAdminOrTechSupport, async (req, res) => {
     try {
         const actor = req.session.user
         const result = await resetUserPassword(
@@ -92,7 +84,7 @@ router.post('/reset-password/:thinkificId', requireAuth, requireTechAccess, asyn
 })
 
 // --- RECENT AUDIT LOGS (for this user's tech support actions) ---
-router.get('/audit-log', requireAuth, requireTechAccess, async (req, res) => {
+router.get('/audit-log', requireAuth, requireAdminOrTechSupport, async (req, res) => {
     try {
         const user = req.session.user
         const isAdmin = user.role === 'Admin'

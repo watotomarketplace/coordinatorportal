@@ -16,7 +16,10 @@ const CAMPUS_CODES = {
 
 // Generate next group code for a campus (e.g. WDT01, WDT02, ...)
 async function generateGroupCode(celebrationPoint) {
-    const prefix = CAMPUS_CODES[celebrationPoint] || 'WXX'
+    const prefix = CAMPUS_CODES[celebrationPoint]
+    if (!prefix) {
+        throw new Error(`Unknown celebration point: "${celebrationPoint}". Valid values: ${Object.keys(CAMPUS_CODES).join(', ')}`)
+    }
     const allCodes = await dbAll(
         'SELECT group_code FROM formation_groups WHERE celebration_point = ?',
         [celebrationPoint]
@@ -214,10 +217,15 @@ router.post('/', requireAuth, async (req, res) => {
             const [, codePrefix, num] = match
             code = `${codePrefix}${String(parseInt(num, 10)).padStart(2, '0')}`
         } else {
-            code = await generateGroupCode(celebration_point)
+            try {
+                code = await generateGroupCode(celebration_point)
+            } catch (err) {
+                if (err.message.startsWith('Unknown celebration point')) {
+                    return res.status(400).json({ success: false, message: err.message })
+                }
+                throw err
+            }
         }
-
-
 
         // Validate co-facilitator is different from main facilitator
         if (co_facilitator_user_id && facilitator_user_id && co_facilitator_user_id === facilitator_user_id) {
@@ -242,25 +250,30 @@ router.post('/', requireAuth, async (req, res) => {
     }
 })
 
-// --- UPDATE GROUP (Admin, TechSupport, Coordinator) ---
+// --- UPDATE GROUP (any authenticated user) ---
 router.put('/:id', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'TechSupport', 'Coordinator'])) {
-            return res.status(403).json({ success: false, message: 'Access denied' })
-        }
 
         const { name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
         const { id } = req.params
 
-        const group = await dbGet('SELECT id, celebration_point FROM formation_groups WHERE id = ?', [id])
+        const group = await dbGet('SELECT id, celebration_point, facilitator_user_id, co_facilitator_user_id FROM formation_groups WHERE id = ?', [id])
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
 
-        // TechSupport can only update groups at their own campus
-        if (!userHasAnyRole(user, ['Admin']) && user.celebration_point && group.celebration_point !== user.celebration_point) {
-            return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
+        // Campus-scoped users can only update groups at their own campus (except Facilitator/CoFacilitator who access via assignment)
+        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator' && user.role !== 'CoFacilitator') {
+            if (user.celebration_point && group.celebration_point !== user.celebration_point) {
+                return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
+            }
+        }
+        // Facilitators/CoFacilitators can only update groups they are assigned to
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+            if (group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+                return res.status(403).json({ success: false, message: 'You can only update groups you are assigned to' })
+            }
         }
 
         // Validate co-facilitator is different from main facilitator
@@ -300,10 +313,6 @@ router.put('/:id', requireAuth, async (req, res) => {
 router.post('/:id/members', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport', 'Facilitator'])) {
-            return res.status(403).json({ success: false, message: 'Access denied' })
-        }
-
         const { student_id, student_name, student_email } = req.body
         const groupId = req.params.id
 
@@ -316,8 +325,15 @@ router.post('/:id/members', requireAuth, async (req, res) => {
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
-        if (user.role === 'Coordinator' && group.celebration_point !== user.celebration_point) {
-            return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
+        // Campus-scoped roles restricted to own campus
+        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator' && user.role !== 'CoFacilitator') {
+            if (user.celebration_point && group.celebration_point !== user.celebration_point) {
+                return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
+            }
+        }
+        // Facilitators/CoFacilitators restricted to their assigned groups
+        if ((user.role === 'Facilitator' || user.role === 'CoFacilitator') && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+            return res.status(403).json({ success: false, message: 'You can only modify groups you are assigned to' })
         }
 
         // Check for duplicate across ANY group
@@ -349,10 +365,6 @@ router.post('/:id/members', requireAuth, async (req, res) => {
 router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
     try {
         const user = req.session.user
-        if (!userHasAnyRole(user, ['Admin', 'Coordinator', 'TechSupport', 'Facilitator'])) {
-            return res.status(403).json({ success: false, message: 'Access denied' })
-        }
-
         const { id, studentId } = req.params
 
         // Verify group exists and access
@@ -360,8 +372,15 @@ router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
-        if (user.role === 'Coordinator' && group.celebration_point !== user.celebration_point) {
-            return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
+        // Campus-scoped roles restricted to own campus
+        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator' && user.role !== 'CoFacilitator') {
+            if (user.celebration_point && group.celebration_point !== user.celebration_point) {
+                return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
+            }
+        }
+        // Facilitators/CoFacilitators restricted to their assigned groups
+        if ((user.role === 'Facilitator' || user.role === 'CoFacilitator') && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+            return res.status(403).json({ success: false, message: 'You can only modify groups you are assigned to' })
         }
 
         await dbRun(

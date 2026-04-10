@@ -95,13 +95,56 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             ORDER BY dc.checkpoint_week, fg.group_code
         `, params)
 
+        // --- 6. Reporting compliance per campus ---
+        const currentWeekSetting = await dbGet("SELECT value FROM system_settings WHERE key = 'current_week'")
+        const currentWeek = currentWeekSetting ? parseInt(currentWeekSetting.value, 10) : 0
+
+        let complianceData = []
+        if (currentWeek > 0) {
+            const allCampuses = (isGlobal && !req.query.celebration_point)
+                ? await dbAll("SELECT DISTINCT celebration_point FROM formation_groups WHERE active = 1")
+                : [{ celebration_point: campus }]
+
+            for (const { celebration_point } of allCampuses) {
+                const row = await dbGet(`
+                    SELECT
+                        COUNT(*) as total_groups,
+                        COUNT(wr.id) as submitted,
+                        COUNT(*) - COUNT(wr.id) as missing
+                    FROM formation_groups fg
+                    LEFT JOIN weekly_reports wr
+                        ON wr.formation_group_id = fg.id AND wr.week_number = ?
+                    WHERE fg.active = 1 AND fg.celebration_point = ?
+                `, [currentWeek, celebration_point])
+                complianceData.push({ celebration_point, ...row })
+            }
+        }
+
+        // --- 7. At-risk groups (2+ consecutive low engagement weeks) ---
+        const atRiskGroups = await dbAll(`
+            SELECT fg.id, fg.group_code, fg.celebration_point,
+                u.name as facilitator_name,
+                COUNT(*) as low_weeks
+            FROM weekly_reports wr
+            JOIN formation_groups fg ON wr.formation_group_id = fg.id
+            LEFT JOIN users u ON fg.facilitator_user_id = u.id
+            WHERE wr.engagement_level = 'low'
+                ${campusFilter} ${facilFilter}
+            GROUP BY fg.id
+            HAVING low_weeks >= 2
+            ORDER BY low_weeks DESC
+            LIMIT 10
+        `, params)
+
         res.json({
             success: true,
             submissionStatus: groups,
             engagementTrend,
             pastoralConcerns,
             formationEvidence,
-            checkpointStatus
+            checkpointStatus,
+            campuses: complianceData,
+            atRiskGroups
         })
     } catch (error) {
         console.error('Formation dashboard error:', error)

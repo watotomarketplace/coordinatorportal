@@ -59,10 +59,10 @@ router.get('/users', requireUserManager, async (req, res) => {
                         u.celebration_point === currentUser.celebration_point
                 })
             } else {
-                // TechSupport / Coordinator — can only see Facilitators at their campus
+                // TechSupport / Coordinator — can only see Facilitators/CoFacilitators at their campus
                 users = users.filter(u => {
                     const uRoles = parseRoles(u.roles || u.role)
-                    return uRoles.includes('Facilitator') &&
+                    return (uRoles.includes('Facilitator') || uRoles.includes('CoFacilitator')) &&
                         u.celebration_point === currentUser.celebration_point
                 })
             }
@@ -112,8 +112,8 @@ router.post('/users', requireUserManager, async (req, res) => {
         const curIsCoordOrTech = curRoles.some(r => ['TechSupport', 'Coordinator'].includes(r))
 
         if (!curIsAdmin) {
-            if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator')) {
-                return res.status(403).json({ success: false, message: 'You can only create Facilitator accounts' })
+            if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator' || r === 'CoFacilitator')) {
+                return res.status(403).json({ success: false, message: 'You can only create Facilitator or Co-Facilitator accounts' })
             }
             if (curIsPastor && !rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
                 return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator or Facilitator accounts' })
@@ -160,9 +160,10 @@ router.post('/users', requireUserManager, async (req, res) => {
         const hashedPassword = bcrypt.hashSync(password, 10)
         const rolesString = rolesList.join(',')
 
-        // Secondary roles: filter out Admin and the primary role
+        // Secondary roles: filter out Admin and the primary role, max 3
         const secondaryRoles = (req.body.secondary_roles || [])
             .filter(r => ALL_VALID_ROLES.includes(r) && r !== 'Admin' && r !== primaryRole)
+            .slice(0, 3)
 
         const result = await dbRun(
             'INSERT INTO users (username, password, name, role, roles, secondary_roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
@@ -238,8 +239,8 @@ router.post('/users/bulk', requireUserManager, async (req, res) => {
 
             // Permission checks
             if (!curIsAdmin) {
-                if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator')) {
-                    results.push({ username, status: 'failed', error: 'You can only create Facilitator accounts' })
+                if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator' || r === 'CoFacilitator')) {
+                    results.push({ username, status: 'failed', error: 'You can only create Facilitator or Co-Facilitator accounts' })
                     failed++
                     continue
                 }
@@ -343,11 +344,11 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
             const tgtRoles = parseRoles(target?.roles || target?.role)
 
             if (curIsCoordOrTech && !curIsPastor) {
-                if (!target || !tgtRoles.includes('Facilitator') || target.celebration_point !== currentUser.celebration_point) {
-                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator accounts at your campus' })
+                if (!target || !tgtRoles.some(r => r === 'Facilitator' || r === 'CoFacilitator') || target.celebration_point !== currentUser.celebration_point) {
+                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator/Co-Facilitator accounts at your campus' })
                 }
-                if (!rolesList.every(r => r === 'Facilitator')) {
-                    return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator' })
+                if (!rolesList.every(r => r === 'Facilitator' || r === 'CoFacilitator')) {
+                    return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator/Co-Facilitator' })
                 }
             } else if (curIsPastor) {
                 if (!target || !tgtRoles.some(r => ['Facilitator', 'Coordinator'].includes(r)) || target.celebration_point !== currentUser.celebration_point) {
@@ -373,9 +374,10 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
 
         const rolesString = rolesList.join(',')
 
-        // Secondary roles: filter out Admin and the primary role
+        // Secondary roles: filter out Admin and the primary role, max 3
         const secondaryRoles = (req.body.secondary_roles || [])
             .filter(r => ALL_VALID_ROLES.includes(r) && r !== 'Admin' && r !== primaryRole)
+            .slice(0, 3)
 
         if (password) {
             const hashedPassword = bcrypt.hashSync(password, 10)
@@ -406,13 +408,13 @@ router.delete('/users/:id', requireUserManager, async (req, res) => {
         // Restrict deactivation based on role
         if (['TechSupport', 'Coordinator'].includes(currentUser.role)) {
             const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
-            if (!target || target.role !== 'Facilitator' || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator accounts at your campus' })
+            if (!target || !['Facilitator', 'CoFacilitator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
+                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator/Co-Facilitator accounts at your campus' })
             }
         } else if (currentUser.role === 'Pastor') {
             const target = await dbGet('SELECT role, celebration_point FROM users WHERE id = ?', [id])
-            if (!target || !['Facilitator', 'Coordinator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
-                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator or Coordinator accounts at your campus' })
+            if (!target || !['Facilitator', 'CoFacilitator', 'Coordinator'].includes(target.role) || target.celebration_point !== currentUser.celebration_point) {
+                return res.status(403).json({ success: false, message: 'You can only deactivate Facilitator, Co-Facilitator, or Coordinator accounts at your campus' })
             }
         }
 

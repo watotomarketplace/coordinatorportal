@@ -259,6 +259,11 @@ async function runMigrations() {
 
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_sa_session ON session_attendance(session_id)`)
 
+  // ─── Additional Performance Indexes ────────────────────────────────
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_dc_group_week ON discernment_checkpoints(formation_group_id, checkpoint_week)') } catch (_) {}
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read)') } catch (_) {}
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC)') } catch (_) {}
+
   // Add name fields to formation_group_members (safe no-op if columns already exist)
   try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_name TEXT') } catch (_) {}
   try { await dbRun('ALTER TABLE formation_group_members ADD COLUMN student_email TEXT') } catch (_) {}

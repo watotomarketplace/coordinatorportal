@@ -88,12 +88,14 @@ var AttendanceAddon = (() => {
     const [showModal, setShowModal] = (0, import_react.useState)(false);
     const [saving, setSaving] = (0, import_react.useState)(false);
     const [toast, setToast] = (0, import_react.useState)(null);
+    const [deleting, setDeleting] = (0, import_react.useState)(null);
+    const [editingSession, setEditingSession] = (0, import_react.useState)(null);
     const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const [checkInDate, setCheckInDate] = (0, import_react.useState)(today);
     const [checkInWeek, setCheckInWeek] = (0, import_react.useState)(1);
     const [didNotMeet, setDidNotMeet] = (0, import_react.useState)(false);
+    const [sessionNotes, setSessionNotes] = (0, import_react.useState)("");
     const [attendanceLog, setAttendanceLog] = (0, import_react.useState)({});
-    const canEdit = currentUser && ["Admin", "Facilitator", "Coordinator"].includes(currentUser.role);
     const showToast = (msg, type = "success") => {
       setToast({ msg, type });
       setTimeout(() => setToast(null), 3e3);
@@ -120,16 +122,53 @@ var AttendanceAddon = (() => {
     (0, import_react.useEffect)(() => {
       fetchData();
     }, [fetchData]);
+    const openNewSession = () => {
+      setEditingSession(null);
+      setCheckInDate(today);
+      setCheckInWeek(1);
+      setDidNotMeet(false);
+      setSessionNotes("");
+      setShowModal(true);
+    };
+    const openEditSession = async (session) => {
+      setEditingSession(session);
+      setCheckInDate(session.session_date || today);
+      setCheckInWeek(session.week_number || 1);
+      setDidNotMeet(!!session.did_not_meet);
+      setSessionNotes(session.notes || "");
+      try {
+        const res = await fetch(`/api/attendance/sessions/${session.id}`);
+        const data = await res.json();
+        if (data.success && data.attendance) {
+          const log = {};
+          members.forEach((m) => {
+            const record = data.attendance.find((a) => a.group_member_id === m.id);
+            log[m.id] = {
+              attended: record ? !!record.attended : false,
+              note: record?.note || "",
+              noteOpen: !!record?.note
+            };
+          });
+          setAttendanceLog(log);
+        }
+      } catch (e) {
+        console.error("Failed to load session attendance:", e);
+        const log = {};
+        members.forEach((m) => {
+          log[m.id] = { attended: false, note: "", noteOpen: false };
+        });
+        setAttendanceLog(log);
+      }
+      setShowModal(true);
+    };
     (0, import_react.useEffect)(() => {
-      if (!showModal) return;
+      if (!showModal || editingSession) return;
       const log = {};
       members.forEach((m) => {
         log[m.id] = { attended: false, note: "", noteOpen: false };
       });
       setAttendanceLog(log);
-      setDidNotMeet(false);
-      setCheckInDate(today);
-    }, [showModal, members]);
+    }, [showModal, members, editingSession]);
     const toggleAttended = (id) => {
       setAttendanceLog((prev) => ({
         ...prev,
@@ -146,24 +185,43 @@ var AttendanceAddon = (() => {
     const handleSave = async () => {
       setSaving(true);
       try {
-        const sRes = await fetch(`/api/attendance/group/${groupId}/sessions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_date: checkInDate,
-            week_number: checkInWeek,
-            did_not_meet: didNotMeet
-          })
-        });
-        const sData = await sRes.json();
-        if (!sData.success) throw new Error(sData.message);
+        let sessionId;
+        if (editingSession) {
+          const uRes = await fetch(`/api/attendance/sessions/${editingSession.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_date: checkInDate,
+              week_number: checkInWeek,
+              did_not_meet: didNotMeet,
+              notes: sessionNotes || null
+            })
+          });
+          const uData = await uRes.json();
+          if (!uData.success) throw new Error(uData.message);
+          sessionId = editingSession.id;
+        } else {
+          const sRes = await fetch(`/api/attendance/group/${groupId}/sessions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_date: checkInDate,
+              week_number: checkInWeek,
+              did_not_meet: didNotMeet,
+              notes: sessionNotes || null
+            })
+          });
+          const sData = await sRes.json();
+          if (!sData.success) throw new Error(sData.message);
+          sessionId = sData.sessionId;
+        }
         if (!didNotMeet) {
           const payload = members.map((m) => ({
             group_member_id: m.id,
             attended: !!attendanceLog[m.id]?.attended,
             note: attendanceLog[m.id]?.note || null
           }));
-          const cRes = await fetch(`/api/attendance/sessions/${sData.sessionId}/checkin`, {
+          const cRes = await fetch(`/api/attendance/sessions/${sessionId}/checkin`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ attendance: payload })
@@ -172,21 +230,39 @@ var AttendanceAddon = (() => {
           if (!cData.success) throw new Error(cData.message);
         }
         setShowModal(false);
+        setEditingSession(null);
         await fetchData();
-        showToast("Session saved");
+        showToast(editingSession ? "Session updated" : "Session saved");
       } catch (e) {
         showToast(e.message || "Failed to save session", "error");
       } finally {
         setSaving(false);
       }
     };
+    const handleDelete = async (sessionId) => {
+      if (!confirm("Delete this session and all its attendance records?")) return;
+      setDeleting(sessionId);
+      try {
+        const res = await fetch(`/api/attendance/sessions/${sessionId}`, { method: "DELETE" });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        await fetchData();
+        showToast("Session deleted");
+      } catch (e) {
+        showToast(e.message || "Failed to delete session", "error");
+      } finally {
+        setDeleting(null);
+      }
+    };
     const panelStyle = {
-      background: "var(--glass-bg)",
-      backdropFilter: "blur(20px)",
-      border: "1px solid var(--glass-border)",
-      borderRadius: 12,
+      background: "var(--glass-layer-2, var(--glass-bg))",
+      backdropFilter: "var(--blur-layer-2, blur(20px))",
+      WebkitBackdropFilter: "var(--blur-layer-2, blur(20px))",
+      border: "var(--border-layer-2, 1px solid var(--glass-border))",
+      borderRadius: 16,
       overflow: "hidden",
-      marginTop: 20
+      marginTop: 20,
+      boxShadow: "var(--shadow-layer-2, 0 4px 16px rgba(0,0,0,0.15))"
     };
     const panelHeaderStyle = {
       padding: "12px 16px",
@@ -205,6 +281,17 @@ var AttendanceAddon = (() => {
       alignItems: "center",
       gap: 10
     };
+    const inputStyle = {
+      width: "100%",
+      padding: "9px 12px",
+      borderRadius: 8,
+      background: "rgba(255,255,255,0.07)",
+      border: "1px solid var(--glass-border)",
+      color: "var(--text-primary)",
+      fontSize: 13,
+      outline: "none",
+      boxSizing: "border-box"
+    };
     if (loading) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: panelStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: panelHeaderStyle, children: "\u{1F4C5} Attendance" }),
@@ -221,21 +308,31 @@ var AttendanceAddon = (() => {
         bottom: 24,
         right: 24,
         zIndex: 99999,
-        padding: "10px 18px",
-        borderRadius: 10,
+        padding: "12px 18px",
+        borderRadius: 16,
         fontSize: 13,
         fontWeight: 600,
-        background: toast.type === "error" ? "rgba(255,59,48,0.9)" : "rgba(0,184,148,0.9)",
-        color: "#fff",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.4)"
-      }, children: toast.msg }),
+        background: "var(--glass-layer-4, rgba(30,30,40,0.98))",
+        backdropFilter: "blur(40px) saturate(180%)",
+        WebkitBackdropFilter: "blur(40px) saturate(180%)",
+        border: "var(--border-layer-2, 1px solid rgba(255,255,255,0.1))",
+        color: toast.type === "error" ? "#ff453a" : "#30d158",
+        boxShadow: "var(--shadow-layer-3, 0 8px 32px rgba(0,0,0,0.4))",
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }, children: [
+        toast.type === "error" ? "\u274C" : "\u2705",
+        " ",
+        toast.msg
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: panelStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: panelHeaderStyle, children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "\u{1F4C5} Attendance" }),
-          canEdit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
             "button",
             {
-              onClick: () => setShowModal(true),
+              onClick: openNewSession,
               style: {
                 padding: "6px 14px",
                 borderRadius: 8,
@@ -275,36 +372,74 @@ var AttendanceAddon = (() => {
           sessions.length,
           ")"
         ] }) }),
-        sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { padding: 24, textAlign: "center", color: "var(--text-secondary)", fontSize: 13 }, children: [
-          "No sessions recorded yet.",
-          canEdit ? ' Use "Record Session" above to log the first one.' : ""
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 10 }, children: sessions.map((s) => {
+        sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { padding: 24, textAlign: "center", color: "var(--text-secondary)", fontSize: 13 }, children: 'No sessions recorded yet. Use "Record Session" above to log the first one.' }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 10 }, children: sessions.map((s) => {
           const dateStr = (/* @__PURE__ */ new Date(s.session_date + "T00:00:00")).toLocaleDateString(void 0, { weekday: "short", month: "short", day: "numeric" });
-          return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
-            padding: 14,
-            borderRadius: 10,
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid var(--glass-border)"
-          }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }, children: dateStr }),
-              s.did_not_meet ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 10, padding: "2px 6px", borderRadius: 6, background: "rgba(253,203,110,0.15)", color: "#fdcb6e", fontWeight: 600 }, children: "DNM" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: { fontSize: 11, color: "var(--text-secondary)" }, children: [
-                "Wk ",
-                s.week_number || "\u2014"
-              ] })
-            ] }),
-            !s.did_not_meet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 12, color: "var(--text-secondary)" }, children: [
-              "\u{1F465} ",
-              s.attendance_count,
-              "/",
-              s.member_count,
-              " attended"
-            ] }),
-            s.notes && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 6, fontStyle: "italic" }, children: [
-              s.notes.slice(0, 80),
-              s.notes.length > 80 ? "\u2026" : ""
-            ] })
-          ] }, s.id);
+          const isDeleting = deleting === s.id;
+          return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+            "div",
+            {
+              style: {
+                padding: 14,
+                borderRadius: 10,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid var(--glass-border)",
+                cursor: "pointer",
+                transition: "background 0.15s",
+                position: "relative"
+              },
+              onClick: () => openEditSession(s),
+              onMouseEnter: (e) => e.currentTarget.style.background = "rgba(255,255,255,0.07)",
+              onMouseLeave: (e) => e.currentTarget.style.background = "rgba(255,255,255,0.03)",
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }, children: dateStr }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 6 }, children: [
+                    s.did_not_meet ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 10, padding: "2px 6px", borderRadius: 6, background: "rgba(253,203,110,0.15)", color: "#fdcb6e", fontWeight: 600 }, children: "DNM" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: { fontSize: 11, color: "var(--text-secondary)" }, children: [
+                      "Wk ",
+                      s.week_number || "\u2014"
+                    ] }),
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                      "button",
+                      {
+                        onClick: (e) => {
+                          e.stopPropagation();
+                          handleDelete(s.id);
+                        },
+                        disabled: isDeleting,
+                        title: "Delete session",
+                        style: {
+                          background: "none",
+                          border: "none",
+                          cursor: isDeleting ? "wait" : "pointer",
+                          color: "rgba(255,118,117,0.6)",
+                          fontSize: 14,
+                          padding: "0 2px",
+                          lineHeight: 1,
+                          transition: "color 0.15s"
+                        },
+                        onMouseEnter: (e) => e.currentTarget.style.color = "#ff7675",
+                        onMouseLeave: (e) => e.currentTarget.style.color = "rgba(255,118,117,0.6)",
+                        children: "\u{1F5D1}"
+                      }
+                    )
+                  ] })
+                ] }),
+                !s.did_not_meet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 12, color: "var(--text-secondary)" }, children: [
+                  "\u{1F465} ",
+                  s.attendance_count,
+                  "/",
+                  s.member_count,
+                  " attended"
+                ] }),
+                s.notes && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 6, fontStyle: "italic" }, children: [
+                  s.notes.slice(0, 80),
+                  s.notes.length > 80 ? "\u2026" : ""
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 10, color: "rgba(74,158,255,0.5)", marginTop: 6 }, children: "Tap to edit" })
+              ]
+            },
+            s.id
+          );
         }) })
       ] }),
       showModal && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -314,36 +449,45 @@ var AttendanceAddon = (() => {
             position: "fixed",
             inset: 0,
             zIndex: 1e4,
-            background: "rgba(0,0,0,0.6)",
-            backdropFilter: "blur(6px)",
+            background: "rgba(0,0,0,0.3)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
             display: "flex",
             alignItems: "flex-end",
             justifyContent: "center"
           },
-          onClick: () => setShowModal(false),
+          onClick: () => {
+            setShowModal(false);
+            setEditingSession(null);
+          },
           children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
             "div",
             {
               style: {
                 width: "100%",
                 maxWidth: 480,
-                background: "var(--glass-layer-2, rgba(30,30,40,0.96))",
-                backdropFilter: "blur(24px)",
-                border: "1px solid var(--glass-border)",
+                background: "var(--glass-layer-4, rgba(30,30,40,0.98))",
+                backdropFilter: "blur(40px) saturate(180%)",
+                WebkitBackdropFilter: "blur(40px) saturate(180%)",
+                border: "var(--border-layer-2, 1px solid rgba(255,255,255,0.12))",
                 borderRadius: "20px 20px 0 0",
                 padding: "20px 20px 32px",
                 maxHeight: "90vh",
                 display: "flex",
-                flexDirection: "column"
+                flexDirection: "column",
+                boxShadow: "var(--shadow-layer-4, 0 -10px 40px rgba(0,0,0,0.3))"
               },
               onClick: (e) => e.stopPropagation(),
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }, children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }, children: "Record Session" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }, children: editingSession ? "Edit Session" : "Record Session" }),
                     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }, children: groupName })
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => setShowModal(false), style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 20, cursor: "pointer", lineHeight: 1 }, children: "\u2715" })
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => {
+                    setShowModal(false);
+                    setEditingSession(null);
+                  }, style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 20, cursor: "pointer", lineHeight: 1 }, children: "\u2715" })
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 10, marginBottom: 14 }, children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { flex: 1 }, children: [
@@ -354,17 +498,7 @@ var AttendanceAddon = (() => {
                         type: "date",
                         value: checkInDate,
                         onChange: (e) => setCheckInDate(e.target.value),
-                        style: {
-                          width: "100%",
-                          padding: "9px 12px",
-                          borderRadius: 8,
-                          background: "rgba(255,255,255,0.07)",
-                          border: "1px solid var(--glass-border)",
-                          color: "var(--text-primary)",
-                          fontSize: 13,
-                          outline: "none",
-                          boxSizing: "border-box"
-                        }
+                        style: inputStyle
                       }
                     )
                   ] }),
@@ -375,16 +509,7 @@ var AttendanceAddon = (() => {
                       {
                         value: checkInWeek,
                         onChange: (e) => setCheckInWeek(Number(e.target.value)),
-                        style: {
-                          width: "100%",
-                          padding: "9px 12px",
-                          borderRadius: 8,
-                          background: "rgba(255,255,255,0.07)",
-                          border: "1px solid var(--glass-border)",
-                          color: "var(--text-primary)",
-                          fontSize: 13,
-                          outline: "none"
-                        },
+                        style: inputStyle,
                         children: Array.from({ length: 13 }, (_, i) => i + 1).map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", { value: w, children: [
                           "Week ",
                           w
@@ -392,6 +517,23 @@ var AttendanceAddon = (() => {
                       }
                     )
                   ] })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginBottom: 14 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "block", marginBottom: 4 }, children: "Session Notes (optional)" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "textarea",
+                    {
+                      value: sessionNotes,
+                      onChange: (e) => setSessionNotes(e.target.value),
+                      placeholder: "How did the session go?",
+                      rows: 2,
+                      style: {
+                        ...inputStyle,
+                        resize: "vertical",
+                        minHeight: 48
+                      }
+                    }
+                  )
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { style: {
                   display: "flex",
@@ -517,7 +659,7 @@ var AttendanceAddon = (() => {
                       fontSize: 15,
                       cursor: saving ? "not-allowed" : "pointer"
                     },
-                    children: saving ? "Saving\u2026" : "Save Session"
+                    children: saving ? "Saving\u2026" : editingSession ? "Update Session" : "Save Session"
                   }
                 )
               ]

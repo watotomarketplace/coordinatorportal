@@ -44,16 +44,19 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
     const [showModal, setShowModal]   = useState(false)
     const [saving, setSaving]         = useState(false)
     const [toast, setToast]           = useState(null)
+    const [deleting, setDeleting]     = useState(null) // sessionId being deleted
+
+    // The session being edited (null = creating new)
+    const [editingSession, setEditingSession] = useState(null)
 
     // Check-in form state
     const today = new Date().toISOString().slice(0, 10)
     const [checkInDate, setCheckInDate]     = useState(today)
     const [checkInWeek, setCheckInWeek]     = useState(1)
     const [didNotMeet, setDidNotMeet]       = useState(false)
+    const [sessionNotes, setSessionNotes]   = useState('')
     const [attendanceLog, setAttendanceLog] = useState({})
     // attendanceLog[memberId] = { attended: bool, note: string, noteOpen: bool }
-
-    const canEdit = currentUser && ['Admin', 'Facilitator', 'Coordinator'].includes(currentUser.role)
 
     const showToast = (msg, type = 'success') => {
         setToast({ msg, type })
@@ -82,17 +85,60 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
 
     useEffect(() => { fetchData() }, [fetchData])
 
-    // Re-initialise attendanceLog when members load or modal opens
+    // Open modal for NEW session
+    const openNewSession = () => {
+        setEditingSession(null)
+        setCheckInDate(today)
+        setCheckInWeek(1)
+        setDidNotMeet(false)
+        setSessionNotes('')
+        setShowModal(true)
+    }
+
+    // Open modal for EDITING an existing session
+    const openEditSession = async (session) => {
+        setEditingSession(session)
+        setCheckInDate(session.session_date || today)
+        setCheckInWeek(session.week_number || 1)
+        setDidNotMeet(!!session.did_not_meet)
+        setSessionNotes(session.notes || '')
+
+        // Load existing attendance for this session
+        try {
+            const res = await fetch(`/api/attendance/sessions/${session.id}`)
+            const data = await res.json()
+            if (data.success && data.attendance) {
+                const log = {}
+                members.forEach(m => {
+                    const record = data.attendance.find(a => a.group_member_id === m.id)
+                    log[m.id] = {
+                        attended: record ? !!record.attended : false,
+                        note: record?.note || '',
+                        noteOpen: !!(record?.note),
+                    }
+                })
+                setAttendanceLog(log)
+            }
+        } catch (e) {
+            console.error('Failed to load session attendance:', e)
+            // Fallback: blank log
+            const log = {}
+            members.forEach(m => { log[m.id] = { attended: false, note: '', noteOpen: false } })
+            setAttendanceLog(log)
+        }
+
+        setShowModal(true)
+    }
+
+    // Re-initialise attendanceLog when modal opens for NEW session
     useEffect(() => {
-        if (!showModal) return
+        if (!showModal || editingSession) return
         const log = {}
         members.forEach(m => {
             log[m.id] = { attended: false, note: '', noteOpen: false }
         })
         setAttendanceLog(log)
-        setDidNotMeet(false)
-        setCheckInDate(today)
-    }, [showModal, members])
+    }, [showModal, members, editingSession])
 
     const toggleAttended = (id) => {
         setAttendanceLog(prev => ({
@@ -114,27 +160,48 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
     const handleSave = async () => {
         setSaving(true)
         try {
-            // 1. Create session
-            const sRes = await fetch(`/api/attendance/group/${groupId}/sessions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_date: checkInDate,
-                    week_number: checkInWeek,
-                    did_not_meet: didNotMeet,
-                })
-            })
-            const sData = await sRes.json()
-            if (!sData.success) throw new Error(sData.message)
+            let sessionId
 
-            // 2. Submit attendance (skip if group did not meet)
+            if (editingSession) {
+                // UPDATE existing session
+                const uRes = await fetch(`/api/attendance/sessions/${editingSession.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_date: checkInDate,
+                        week_number: checkInWeek,
+                        did_not_meet: didNotMeet,
+                        notes: sessionNotes || null,
+                    })
+                })
+                const uData = await uRes.json()
+                if (!uData.success) throw new Error(uData.message)
+                sessionId = editingSession.id
+            } else {
+                // CREATE new session
+                const sRes = await fetch(`/api/attendance/group/${groupId}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_date: checkInDate,
+                        week_number: checkInWeek,
+                        did_not_meet: didNotMeet,
+                        notes: sessionNotes || null,
+                    })
+                })
+                const sData = await sRes.json()
+                if (!sData.success) throw new Error(sData.message)
+                sessionId = sData.sessionId
+            }
+
+            // Submit attendance (skip if group did not meet)
             if (!didNotMeet) {
                 const payload = members.map(m => ({
                     group_member_id: m.id,
                     attended: !!(attendanceLog[m.id]?.attended),
                     note: attendanceLog[m.id]?.note || null,
                 }))
-                const cRes = await fetch(`/api/attendance/sessions/${sData.sessionId}/checkin`, {
+                const cRes = await fetch(`/api/attendance/sessions/${sessionId}/checkin`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ attendance: payload })
@@ -144,12 +211,29 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
             }
 
             setShowModal(false)
+            setEditingSession(null)
             await fetchData()
-            showToast('Session saved')
+            showToast(editingSession ? 'Session updated' : 'Session saved')
         } catch (e) {
             showToast(e.message || 'Failed to save session', 'error')
         } finally {
             setSaving(false)
+        }
+    }
+
+    const handleDelete = async (sessionId) => {
+        if (!confirm('Delete this session and all its attendance records?')) return
+        setDeleting(sessionId)
+        try {
+            const res = await fetch(`/api/attendance/sessions/${sessionId}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (!data.success) throw new Error(data.message)
+            await fetchData()
+            showToast('Session deleted')
+        } catch (e) {
+            showToast(e.message || 'Failed to delete session', 'error')
+        } finally {
+            setDeleting(null)
         }
     }
 
@@ -176,6 +260,12 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
         padding: '10px 14px',
         borderBottom: '1px solid var(--glass-border)',
         display: 'flex', alignItems: 'center', gap: 10,
+    }
+
+    const inputStyle = {
+        width: '100%', padding: '9px 12px', borderRadius: 8,
+        background: 'rgba(255,255,255,0.07)', border: '1px solid var(--glass-border)',
+        color: 'var(--text-primary)', fontSize: 13, outline: 'none', boxSizing: 'border-box',
     }
 
     // ─── Loading state ────────────────────────────────────────────────────────
@@ -216,18 +306,16 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
             <div style={panelStyle}>
                 <div style={panelHeaderStyle}>
                     <span>📅 Attendance</span>
-                    {canEdit && (
-                        <button
-                            onClick={() => setShowModal(true)}
-                            style={{
-                                padding: '6px 14px', borderRadius: 8, border: 'none',
-                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                                color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                            }}
-                        >
-                            + Record Session
-                        </button>
-                    )}
+                    <button
+                        onClick={openNewSession}
+                        style={{
+                            padding: '6px 14px', borderRadius: 8, border: 'none',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                        }}
+                    >
+                        + Record Session
+                    </button>
                 </div>
 
                 {/* Members attendance overview */}
@@ -269,25 +357,50 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                 </div>
                 {sessions.length === 0 ? (
                     <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
-                        No sessions recorded yet.{canEdit ? ' Use "Record Session" above to log the first one.' : ''}
+                        No sessions recorded yet. Use "Record Session" above to log the first one.
                     </div>
                 ) : (
                     <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 10 }}>
                         {sessions.map(s => {
                             const dateStr = new Date(s.session_date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+                            const isDeleting = deleting === s.id
                             return (
                                 <div key={s.id} style={{
                                     padding: 14, borderRadius: 10,
                                     background: 'rgba(255,255,255,0.03)',
                                     border: '1px solid var(--glass-border)',
-                                }}>
+                                    cursor: 'pointer',
+                                    transition: 'background 0.15s',
+                                    position: 'relative',
+                                }}
+                                    onClick={() => openEditSession(s)}
+                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
+                                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                                >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                                         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{dateStr}</span>
-                                        {s.did_not_meet ? (
-                                            <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 6, background: 'rgba(253,203,110,0.15)', color: '#fdcb6e', fontWeight: 600 }}>DNM</span>
-                                        ) : (
-                                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Wk {s.week_number || '—'}</span>
-                                        )}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            {s.did_not_meet ? (
+                                                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 6, background: 'rgba(253,203,110,0.15)', color: '#fdcb6e', fontWeight: 600 }}>DNM</span>
+                                            ) : (
+                                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Wk {s.week_number || '—'}</span>
+                                            )}
+                                            {/* Delete button */}
+                                            <button
+                                                onClick={e => { e.stopPropagation(); handleDelete(s.id) }}
+                                                disabled={isDeleting}
+                                                title="Delete session"
+                                                style={{
+                                                    background: 'none', border: 'none', cursor: isDeleting ? 'wait' : 'pointer',
+                                                    color: 'rgba(255,118,117,0.6)', fontSize: 14, padding: '0 2px',
+                                                    lineHeight: 1, transition: 'color 0.15s',
+                                                }}
+                                                onMouseEnter={e => e.currentTarget.style.color = '#ff7675'}
+                                                onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,118,117,0.6)'}
+                                            >
+                                                🗑
+                                            </button>
+                                        </div>
                                     </div>
                                     {!s.did_not_meet && (
                                         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -299,6 +412,10 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                             {s.notes.slice(0, 80)}{s.notes.length > 80 ? '…' : ''}
                                         </div>
                                     )}
+                                    {/* Edit hint */}
+                                    <div style={{ fontSize: 10, color: 'rgba(74,158,255,0.5)', marginTop: 6 }}>
+                                        Tap to edit
+                                    </div>
                                 </div>
                             )
                         })}
@@ -306,7 +423,7 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                 )}
             </div>
 
-            {/* ── Check-in Modal ── */}
+            {/* ── Check-in Modal (Create + Edit) ── */}
             {showModal && (
                 <div
                     style={{
@@ -314,7 +431,7 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                         background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)',
                         display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
                     }}
-                    onClick={() => setShowModal(false)}
+                    onClick={() => { setShowModal(false); setEditingSession(null) }}
                 >
                     <div
                         style={{
@@ -331,10 +448,12 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                         {/* Modal header */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                             <div>
-                                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>Record Session</div>
+                                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                    {editingSession ? 'Edit Session' : 'Record Session'}
+                                </div>
                                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{groupName}</div>
                             </div>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+                            <button onClick={() => { setShowModal(false); setEditingSession(null) }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>✕</button>
                         </div>
 
                         {/* Date + Week */}
@@ -344,11 +463,7 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                 <input
                                     type="date" value={checkInDate}
                                     onChange={e => setCheckInDate(e.target.value)}
-                                    style={{
-                                        width: '100%', padding: '9px 12px', borderRadius: 8,
-                                        background: 'rgba(255,255,255,0.07)', border: '1px solid var(--glass-border)',
-                                        color: 'var(--text-primary)', fontSize: 13, outline: 'none', boxSizing: 'border-box',
-                                    }}
+                                    style={inputStyle}
                                 />
                             </div>
                             <div style={{ width: 90 }}>
@@ -356,17 +471,29 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                 <select
                                     value={checkInWeek}
                                     onChange={e => setCheckInWeek(Number(e.target.value))}
-                                    style={{
-                                        width: '100%', padding: '9px 12px', borderRadius: 8,
-                                        background: 'rgba(255,255,255,0.07)', border: '1px solid var(--glass-border)',
-                                        color: 'var(--text-primary)', fontSize: 13, outline: 'none',
-                                    }}
+                                    style={inputStyle}
                                 >
                                     {Array.from({ length: 13 }, (_, i) => i + 1).map(w => (
                                         <option key={w} value={w}>Week {w}</option>
                                     ))}
                                 </select>
                             </div>
+                        </div>
+
+                        {/* Session notes */}
+                        <div style={{ marginBottom: 14 }}>
+                            <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Session Notes (optional)</label>
+                            <textarea
+                                value={sessionNotes}
+                                onChange={e => setSessionNotes(e.target.value)}
+                                placeholder="How did the session go?"
+                                rows={2}
+                                style={{
+                                    ...inputStyle,
+                                    resize: 'vertical',
+                                    minHeight: 48,
+                                }}
+                            />
                         </div>
 
                         {/* Did not meet toggle */}
@@ -479,7 +606,7 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                 fontWeight: 700, fontSize: 15, cursor: saving ? 'not-allowed' : 'pointer',
                             }}
                         >
-                            {saving ? 'Saving…' : 'Save Session'}
+                            {saving ? 'Saving…' : editingSession ? 'Update Session' : 'Save Session'}
                         </button>
                     </div>
                 </div>

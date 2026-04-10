@@ -50,7 +50,7 @@ async function getNotionConfig() {
     return {
         apiKey: effectiveApiKey,
         databaseId: effectiveDbId,
-        syncIntervalMinutes: parseInt(interval?.value || process.env.NOTION_SYNC_INTERVAL || '15', 10)
+        syncIntervalMinutes: parseInt(interval?.value || process.env.NOTION_SYNC_INTERVAL || '3', 10)
     }
 }
 

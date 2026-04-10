@@ -15,7 +15,7 @@ let cache = {
     data: null, // Enrolled students
     unenrolled: [], // Potential students
     timestamp: 0,
-    duration: 15 * 60 * 1000 // 15 minutes
+    duration: 1 * 60 * 1000 // 1 minute — near-real-time data
 }
 
 // ═══════════════════════════════════════════════════════
@@ -497,7 +497,10 @@ async function doRefresh(fullSync = false) {
 
                 // Process Enrollment Data
                 const rawProgress = parseFloat(enrollment.percentage_completed) || 0
-                const progressPercent = Math.round(rawProgress * 100)
+                // Thinkific sends 0.0–1.0 decimals. Safely handle if already 0–100.
+                const progressPercent = rawProgress <= 1.0
+                    ? Math.round(rawProgress * 100)
+                    : Math.round(rawProgress)
                 let status = 'Not Started'
                 if (enrollment.completed_at || enrollment.completed === true || rawProgress >= 1.0) status = 'Completed'
                 else if (rawProgress > 0) status = 'In Progress'
@@ -510,6 +513,7 @@ async function doRefresh(fullSync = false) {
                 if (daysInactive >= 30) alertLevel = 'red'
                 else if (daysInactive >= 14) alertLevel = 'yellow'
 
+                const risk = calculateRiskScore(user, enrollment)
                 const studentRecord = {
                     id: enrollment.id, userId: user.userId,
                     first_name: user.first_name, last_name: user.last_name,
@@ -521,7 +525,13 @@ async function doRefresh(fullSync = false) {
                     celebration_point: user.celebration_point,
                     last_sign_in_at: user.last_sign_in_at,
                     started_at: enrollment.started_at,
-                    risk: calculateRiskScore(user, enrollment) // NEW: Weighted Risk Score
+                    risk, // Weighted Risk Score object
+                    // Flat aliases for export compatibility
+                    risk_score: risk.score,
+                    risk_category: risk.category,
+                    days_since_last_sign_in: daysInactive,
+                    percentage_completed: progressPercent,
+                    enrolled_at: enrollment.started_at || enrollment.created_at
                 }
 
                 // Update or Add to Merged List
@@ -632,11 +642,9 @@ export async function preWarmCache() {
     // Load disk cache first for instant API responses
     if (loadCache()) {
         console.log('🚀 Disk cache loaded — API will serve data immediately')
-        // If cache is stale, refresh in background
-        if (Date.now() - cache.timestamp > cache.duration) {
-            console.log('⏳ Disk cache is stale — starting background refresh...')
-            triggerBackgroundRefresh()
-        }
+        // Always trigger a background refresh on startup to get fresh risk scores
+        console.log('⏳ Starting background refresh for fresh data...')
+        triggerBackgroundRefresh()
     } else {
         console.log('🆕 No disk cache — starting initial data fetch in background...')
         doRefresh().catch(err => console.error('❌ Initial fetch failed:', err.message))
@@ -655,29 +663,60 @@ export async function forceRefresh() {
 // ═══════════════════════════════════════════════════════
 export function getStats(students) {
     const uniqueStudents = new Set(students.map(s => s.userId || s.name)).size
-    const completedCourses = students.filter(s => s.status === 'Completed').length
-    const activeCourses = students.filter(s => s.status === 'In Progress').length
+
+    // WL101-specific stats using progress thresholds
+    const healthy = students.filter(s => (s.progress || 0) >= 75).length
+    const atRisk = students.filter(s => (s.progress || 0) < 30).length
+    const inProgress = students.filter(s => {
+        const p = s.progress || 0
+        return p >= 30 && p < 75
+    }).length
+
+    // Active = logged in or made progress in last 14 days
+    const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000)
+    const activeStudents = students.filter(s => {
+        if (s.last_sign_in_at && new Date(s.last_sign_in_at).getTime() > twoWeeksAgo) return true
+        if (s.lastActivity && new Date(s.lastActivity).getTime() > twoWeeksAgo) return true
+        return false
+    }).length
+
     const totalProgress = students.reduce((sum, s) => sum + (s.progress || 0), 0)
     const averageProgress = students.length > 0 ? Math.round(totalProgress / students.length) : 0
-    return { totalStudents: uniqueStudents, activeCourses, completedCourses, averageProgress }
+
+    return {
+        totalStudents: uniqueStudents,
+        activeStudents,
+        healthyStudents: healthy,
+        atRiskStudents: atRisk,
+        inProgressStudents: inProgress,
+        averageProgress,
+        // Legacy keys so existing frontend doesn't break
+        activeCourses: activeStudents,
+        completedCourses: healthy,
+    }
 }
 
 export function getChartData(students) {
+    // Progress distribution — 4 buckets with meaningful labels
     const progressDistribution = [0, 0, 0, 0]
     students.forEach(s => {
         const p = s.progress || 0
-        if (p <= 25) progressDistribution[0]++
-        else if (p <= 50) progressDistribution[1]++
-        else if (p <= 75) progressDistribution[2]++
+        if (p < 25) progressDistribution[0]++
+        else if (p < 50) progressDistribution[1]++
+        else if (p < 75) progressDistribution[2]++
         else progressDistribution[3]++
     })
 
+    // Completion status using WL101 progress thresholds
     const completionStatus = [
-        students.filter(s => s.status === 'Completed').length,
-        students.filter(s => s.status === 'In Progress').length,
-        students.filter(s => s.status === 'Not Started').length
+        students.filter(s => (s.progress || 0) >= 75).length,     // On Track (75%+)
+        students.filter(s => {
+            const p = s.progress || 0; return p >= 30 && p < 75
+        }).length,                                                  // In Progress (30–74%)
+        students.filter(s => (s.progress || 0) < 30).length,       // Needs Help (<30%)
     ]
 
+    // Course progress — average per course name
     const courseMap = {}
     students.forEach(s => {
         if (!courseMap[s.course]) courseMap[s.course] = { total: 0, count: 0 }
@@ -693,15 +732,14 @@ export function getChartData(students) {
         values: sortedCourses.map(c => Math.round(courseMap[c].total / courseMap[c].count))
     }
 
-    const engagement = {
-        labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-        values: [
-            Math.floor(students.length * 0.2), Math.floor(students.length * 0.4),
-            Math.floor(students.length * 0.5), Math.floor(students.length * 0.6)
-        ]
+    // Risk distribution — real data from calculated risk categories
+    const riskDistribution = {
+        healthy: students.filter(s => s.risk_category === 'Healthy').length,
+        attention: students.filter(s => s.risk_category === 'Attention').length,
+        critical: students.filter(s => s.risk_category === 'Critical').length,
     }
 
-    return { progressDistribution, completionStatus, courseProgress, engagement }
+    return { progressDistribution, completionStatus, courseProgress, riskDistribution, engagement: null }
 }
 
 export async function enrollUser(userId, courseId = 3300782) {

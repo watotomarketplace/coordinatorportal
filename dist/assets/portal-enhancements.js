@@ -636,17 +636,18 @@
     injectStyles();
     setupFetchInterceptor();
 
-    const observer = new MutationObserver(debounce(enhance, 150));
+    const guardedEnhance = () => {
+      if (window.__wlMutationGuard) return;
+      window.__wlMutationGuard = true;
+      try { enhance(); } finally { window.__wlMutationGuard = false; }
+    };
+    const observer = new MutationObserver(debounce(guardedEnhance, 150));
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Also run on URL changes (React Router)
-    let lastPath = window.location.pathname;
-    setInterval(() => {
-      if (window.location.pathname !== lastPath) {
-        lastPath = window.location.pathname;
-        setTimeout(enhance, 300);
-      }
-    }, 300);
+    // Listen for route changes from shared poller (mobile-v2.js) instead of own interval
+    window.addEventListener('wl-route-change', () => {
+      setTimeout(enhance, 300);
+    });
 
     enhance();
   }

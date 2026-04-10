@@ -363,7 +363,7 @@
     // resolves. _homeScreenPending is set synchronously so a second caller
     // bails before starting a second fetch → no duplicated launcher.
     if (document.getElementById('wl-home-screen')) return;
-    if (_homeScreenPending) return;
+    if (_homeScreenPending || _homeScreenBuilt) return;
     _homeScreenPending = true;
 
     fetchUserSession().then(function (user) {
@@ -394,6 +394,8 @@
       setInterval(function () {
         var el = overlay.querySelector('.wl-home-clock');
         if (el) el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        var dateEl = overlay.querySelector('.wl-home-date');
+        if (dateEl) dateEl.textContent = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
       }, 30000);
 
       // Greeting
@@ -878,9 +880,9 @@
     createOrUpdateIOSNav();
 
     // Show home screen on dashboard, hide on other pages
+    // showHomeScreen() already calls createHomeScreenGrid() if needed — no double call
     if (isDashboardPage() && !isLoginPage()) {
       showHomeScreen();
-      createHomeScreenGrid();
     } else {
       hideHomeScreen();
     }
@@ -1024,13 +1026,12 @@
       updateLoginState();
 
       // Show home screen on dashboard at startup
+      // showHomeScreen() internally calls createHomeScreenGrid() when needed
       if (isDashboardPage() && !isLoginPage()) {
-        createHomeScreenGrid();
         showHomeScreen();
       }
 
-      // CHANGE 2: Clock update interval
-      setInterval(updateHomeScreenClock, 10000);
+      // Clock update is handled inside createHomeScreenGrid() — no duplicate needed
 
       // CHANGE 6: Inject SVG filter for liquid glass (CSS-only)
       injectLiquidGlassFilter();
@@ -1040,24 +1041,43 @@
       setupSwipeDismiss();
     }
 
+    // Global re-entrancy guard: prevents cascading MutationObserver triggers
+    // when one addon modifies the DOM and triggers all other observers.
+    if (!window.__wlMutationGuard) window.__wlMutationGuard = false;
+
     var debounceTimer;
     var observer = new MutationObserver(function () {
+      if (window.__wlMutationGuard) return;
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(enhance, 150);
+      debounceTimer = setTimeout(function () {
+        window.__wlMutationGuard = true;
+        try { enhance(); } finally { window.__wlMutationGuard = false; }
+      }, 150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
-    setInterval(function () {
-      if (window.location.pathname !== _lastPath) {
-        _lastPath = window.location.pathname;
-        onRouteChange();
-      }
-    }, 200);
+    // Single URL poll — emits 'wl-route-change' so other addons don't need their own
+    if (!window.__wlRoutePoller) {
+      window.__wlRoutePoller = true;
+      var __lastPolledPath = window.location.pathname;
+      setInterval(function () {
+        if (window.location.pathname !== __lastPolledPath) {
+          __lastPolledPath = window.location.pathname;
+          window.dispatchEvent(new CustomEvent('wl-route-change', { detail: { path: __lastPolledPath } }));
+        }
+      }, 200);
+      window.addEventListener('popstate', function () {
+        setTimeout(function () {
+          window.dispatchEvent(new CustomEvent('wl-route-change', { detail: { path: window.location.pathname } }));
+        }, 50);
+      });
+    }
+    window.addEventListener('wl-route-change', function () {
+      _lastPath = window.location.pathname;
+      onRouteChange();
+    });
 
     window.addEventListener('resize', handleResize);
-    window.addEventListener('popstate', function () {
-      setTimeout(onRouteChange, 50);
-    });
 
     enhance();
   }

@@ -172,11 +172,12 @@
 
     var debounce = null;
     var observer = new MutationObserver(function () {
-      if (debounce) return;
+      if (debounce || window.__wlMutationGuard) return;
       debounce = setTimeout(function () {
         debounce = null;
-        relabelStatCards();
-        fixTechSupportDOM();
+        window.__wlMutationGuard = true;
+        try { relabelStatCards(); fixTechSupportDOM(); }
+        finally { window.__wlMutationGuard = false; }
       }, 200);
     });
     observer.observe(document.body, { childList: true, subtree: true });

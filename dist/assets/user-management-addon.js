@@ -1030,7 +1030,10 @@
     // MutationObserver — debounced and guarded; ignore mutations triggered
     // by our own addon-owned nodes (.um-*) so we don't loop on ourselves.
     const observer = new MutationObserver(debounce(function () {
+      if (window.__wlMutationGuard) return;
+      window.__wlMutationGuard = true;
       try { enhance(); } catch (_) {}
+      finally { window.__wlMutationGuard = false; }
     }, 120));
     observer.observe(document.body, { childList: true, subtree: true });
 

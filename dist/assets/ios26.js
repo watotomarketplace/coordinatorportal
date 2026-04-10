@@ -739,9 +739,11 @@
 
     // Watch for home screen creation by mobile-v2.js
     var observer = new MutationObserver(function () {
+      if (window.__wlMutationGuard) return;
       var hs = document.getElementById('wl-home-screen');
       if (hs && !hs.dataset.ios26Enhanced) {
-        enhanceHomeScreen();
+        window.__wlMutationGuard = true;
+        try { enhanceHomeScreen(); } finally { window.__wlMutationGuard = false; }
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -750,17 +752,10 @@
     var hs = document.getElementById('wl-home-screen');
     if (hs) enhanceHomeScreen();
 
-    // Route monitoring
-    setInterval(function () {
-      var path = window.location.pathname;
-      if (path !== _lastPath) {
-        _lastPath = path;
-        onRouteChange();
-      }
-    }, 200);
-
-    window.addEventListener('popstate', function () {
-      setTimeout(onRouteChange, 50);
+    // Route monitoring — use shared event from mobile-v2.js (no duplicate polling)
+    window.addEventListener('wl-route-change', function () {
+      _lastPath = window.location.pathname;
+      onRouteChange();
     });
 
     // Handle initial state — if not on dashboard, we're in an app

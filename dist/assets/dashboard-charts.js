@@ -512,19 +512,15 @@
 
   // ─── OBSERVE PAGE CHANGES ────────────────────────────────────────────────────
 
-  var lastPath = ''
-  var observer = new MutationObserver(function() {
+  // Use shared route-change event instead of own MutationObserver + polling
+  window.addEventListener('wl-route-change', function() {
     var path = window.location.pathname
-    if (path !== lastPath) {
-      lastPath = path
-      if (path === '/dashboard' || path === '/') {
-        setTimeout(injectFormationCharts, 600)
-      }
+    if (path === '/dashboard' || path === '/') {
+      setTimeout(injectFormationCharts, 600)
     }
   })
 
   document.addEventListener('DOMContentLoaded', function() {
-    observer.observe(document.body, { childList: true, subtree: true })
     if (window.location.pathname === '/dashboard' || window.location.pathname === '/') {
       setTimeout(injectFormationCharts, 600)
     }

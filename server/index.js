@@ -39,19 +39,17 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
     // Initialize database, then start services that depend on it
-    ; (async () => {
-        await initDatabase()
+await initDatabase()
 
-        // Pre-warm Thinkific cache — loads disk cache instantly, refreshes in background if stale
-        await preWarmCache()
-        console.log(`[Thinkific] Cache contains ${getCacheStatus().cacheSize} students`);
+// Pre-warm Thinkific cache — loads disk cache instantly, refreshes in background if stale
+await preWarmCache()
+console.log(`[Thinkific] Cache contains ${getCacheStatus().cacheSize} students`);
 
-        // Start Queue-based Background Jobs (replaces direct startAutoSync)
-        await initializeCronJobs()
+// Start Queue-based Background Jobs (replaces direct startAutoSync)
+await initializeCronJobs()
 
-        // Start Scheduler (Cron Jobs)
-        initScheduler()
-    })()
+// Start Scheduler (Cron Jobs)
+initScheduler()
 
 // Middleware
 app.use(cors({

@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const IS_POSTGRES = !!process.env.DATABASE_URL
+export const IS_POSTGRES = !!process.env.DATABASE_URL
 let pgPool = null
 
 const dbPath = join(__dirname, 'users.sqlite')
@@ -213,9 +213,13 @@ async function runMigrations() {
   `)
 
   try {
-    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_api_key', '')")
-    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_database_id', '')")
-    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_sync_interval', '5')")
+    const insertSettings = IS_POSTGRES 
+      ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING"
+      : "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)"
+    
+    await dbRun(insertSettings, ['notion_api_key', ''])
+    await dbRun(insertSettings, ['notion_database_id', ''])
+    await dbRun(insertSettings, ['notion_sync_interval', '5'])
   } catch(e) { }
 
   await dbRun(`
@@ -675,7 +679,27 @@ export function saveDatabase() {
 
 function pgConvert(sql) {
   let counter = 1
-  return sql.replace(/\?/g, () => '$' + (counter++))
+  let inString = false
+  let result = ''
+  
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i]
+    if (char === "'") {
+      // Handle escaped single quotes: '' in SQL
+      if (inString && sql[i + 1] === "'") {
+        result += "''"
+        i++
+        continue
+      }
+      inString = !inString
+      result += char
+    } else if (char === '?' && !inString) {
+      result += '$' + (counter++)
+    } else {
+      result += char
+    }
+  }
+  return result
 }
 
 export async function dbGet(sql, params = []) {

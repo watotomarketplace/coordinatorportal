@@ -180,7 +180,7 @@ async function fetchAllPages(endpoint, params = {}) {
 // ═══════════════════════════════════════════════════════
 // CACHE MANAGEMENT
 // ═══════════════════════════════════════════════════════
-async function loadCache() {
+function loadCache() {
     try {
         if (fs.existsSync(CACHE_FILE)) {
             const raw = fs.readFileSync(CACHE_FILE, 'utf8')
@@ -197,7 +197,7 @@ async function loadCache() {
     return false
 }
 
-async function saveCache() {
+function saveCache() {
     try {
         const tmpPath = CACHE_FILE + '.tmp'
         fs.writeFileSync(tmpPath, JSON.stringify(cache), 'utf8')

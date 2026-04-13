@@ -1,5 +1,5 @@
 import express from 'express'
-import { dbAll, dbGet } from '../db/init.js'
+import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getStudentData, getStats, getChartData } from '../services/thinkific.js'
 import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
 import { getCache, setCache } from '../services/cache.js'
@@ -103,17 +103,17 @@ router.get('/summary', requireAuth, applyCampusScope, async (req, res) => {
         `, params)
 
         // 2c. Engagement Trend
+        const avgScoreSql = IS_POSTGRES 
+            ? "ROUND(CAST(AVG(CASE WHEN wr.engagement_level = 'high' THEN 3 WHEN wr.engagement_level = 'medium' THEN 2 WHEN wr.engagement_level = 'low' THEN 1 ELSE NULL END) AS numeric), 2)"
+            : "ROUND(AVG(CASE WHEN wr.engagement_level = 'high' THEN 3 WHEN wr.engagement_level = 'medium' THEN 2 WHEN wr.engagement_level = 'low' THEN 1 ELSE NULL END), 2)"
+
         const engagementTrend = await dbAll(`
             SELECT wr.week_number,
                 SUM(CASE WHEN wr.engagement_level = 'high' THEN 1 ELSE 0 END) as high_count,
                 SUM(CASE WHEN wr.engagement_level = 'medium' THEN 1 ELSE 0 END) as medium_count,
                 SUM(CASE WHEN wr.engagement_level = 'low' THEN 1 ELSE 0 END) as low_count,
                 COUNT(*) as total,
-                ROUND(AVG(CASE
-                    WHEN wr.engagement_level = 'high' THEN 3
-                    WHEN wr.engagement_level = 'medium' THEN 2
-                    WHEN wr.engagement_level = 'low' THEN 1
-                    ELSE NULL END), 2) as avg_score
+                ${avgScoreSql} as avg_score
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
             WHERE 1=1 ${campusFilter} ${facilFilter}

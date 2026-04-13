@@ -4,7 +4,7 @@ import { getNotes, addNote, getGroupNotes, addGroupNote } from '../services/note
 import { getStudentTags, getAllTags, addTag, removeTag, removeTagByName, TAG_COLORS } from '../services/tags.js'
 import { logAudit } from '../services/audit.js'
 import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
-import { dbAll, dbGet } from '../db/init.js'
+import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
@@ -60,21 +60,28 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         let reportingStats = { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
 
         // Fetch attendance trend (last 6 months or 13 weeks)
+        // PostgreSQL is strict: cast only if format matches YYYY-MM-DD
+        const weekSelector = IS_POSTGRES 
+            ? "CASE WHEN session_date ~ '^\\d{4}-\\d{2}-\\d{2}' THEN TO_CHAR(session_date::DATE, 'IYYY\"-\"IW') ELSE '0000-00' END" 
+            : "strftime('%Y-%W', session_date)"
+        const floatCast = IS_POSTGRES ? "DECIMAL" : "FLOAT"
+
         const attendanceTrend = await dbAll(`
-            SELECT strftime('%Y-%W', session_date) as week, 
+            SELECT ${weekSelector} as week, 
                    COUNT(*) as session_count,
-                   AVG(CAST((SELECT COUNT(*) FROM session_attendance WHERE session_id = gs.id AND attended = 1) AS FLOAT) / 
+                   AVG(CAST((SELECT COUNT(*) FROM session_attendance WHERE session_id = gs.id AND attended = 1) AS ${floatCast}) / 
                        NULLIF((SELECT COUNT(*) FROM group_members WHERE formation_group_id = gs.formation_group_id AND active = 1), 0)) * 100 as avg_att
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             GROUP BY week
+            HAVING week != '0000-00'
             ORDER BY week DESC
             LIMIT 13
         `, celebrationPoint ? [celebrationPoint] : [])
 
         attendanceStats.trend = attendanceTrend.reverse().map(t => ({
-            label: `Week ${t.week.split('-')[1]}`,
+            label: `Week ${(t.week || '').split('-')[1] || '??'}`,
             value: Math.round(t.avg_att || 0)
         }))
 
@@ -101,14 +108,14 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         const totalGroups = (await dbGet(`SELECT COUNT(*) as count FROM formation_groups WHERE active = 1 ${celebrationPoint ? 'AND celebration_point = ?' : ''}`, celebrationPoint ? [celebrationPoint] : [])).count || 1
         
         reportingStats.totalReports = reports.length
-        reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns === 1 || r.pastoral_concerns === true).length
+        reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns && r.pastoral_concerns.length > 0 && r.pastoral_concerns !== '0' && r.pastoral_concerns !== 'false').length
         reportingStats.compliance = Math.round((reports.length / (totalGroups * 13)) * 100) // Rough estimation across 13 weeks
 
         // Engagement/Pastoral trend over weeks
         const reportTrend = await dbAll(`
             SELECT week_number, 
                    COUNT(*) as count,
-                   SUM(CASE WHEN pastoral_concerns = 1 THEN 1 ELSE 0 END) as concerns
+                   SUM(CASE WHEN pastoral_concerns IS NOT NULL AND pastoral_concerns != '' AND pastoral_concerns != '0' AND pastoral_concerns != 'false' THEN 1 ELSE 0 END) as concerns
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
             WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}

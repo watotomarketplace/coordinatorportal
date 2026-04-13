@@ -1,20 +1,4 @@
-import { getDatabase } from '../db/init.js'
-
-async function dbAll(sql, params = []) {
-    const db = getDatabase()
-    const stmt = db.prepare(sql)
-    stmt.bind(params)
-    const results = []
-    while (stmt.step()) results.push(stmt.getAsObject())
-    stmt.free()
-    return results
-}
-
-async function dbRun(sql, params = []) {
-    const db = getDatabase()
-    db.run(sql, params)
-    return { lastInsertRowId: db.exec("SELECT last_insert_rowid()")[0]?.values[0]?.[0] }
-}
+import { dbRun, dbAll, IS_POSTGRES } from '../db/init.js'
 
 // Predefined tag colors (macOS Finder-style)
 export const TAG_COLORS = {
@@ -54,10 +38,14 @@ export async function getAllTags() {
  * Add a tag to a student
  */
 export async function addTag(studentId, tagName, color = '#007aff', createdBy = null) {
-    return await dbRun(`
-        INSERT OR IGNORE INTO student_tags (student_id, tag_name, color, created_by)
-        VALUES (?, ?, ?, ?)
-    `, [studentId, tagName, color, createdBy])
+    const sql = IS_POSTGRES
+        ? `INSERT INTO student_tags (student_id, tag_name, color, created_by)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (student_id, tag_name) DO NOTHING`
+        : `INSERT OR IGNORE INTO student_tags (student_id, tag_name, color, created_by)
+           VALUES (?, ?, ?, ?)`
+    
+    return await dbRun(sql, [studentId, tagName, color, createdBy])
 }
 
 /**

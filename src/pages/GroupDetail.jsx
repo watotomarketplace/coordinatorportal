@@ -5,7 +5,8 @@ import { useAuthStore } from '../stores/authStore'
 import { getGroupDetail } from '../lib/api'
 import api from '../lib/api'
 import GroupAttendance from '../components/GroupAttendance'
-import { ArrowLeft, Users, MapPin, UserPlus, Trash2, Search, X, Calendar, MessageSquare, BarChart3, FileText, ChevronRight, Mail, Phone, Cake, Target, Activity, AlertTriangle, CheckCircle, Send, Eye, Flag } from 'lucide-react'
+import EditGroupModal from '../components/EditGroupModal'
+import { ArrowLeft, Users, MapPin, UserPlus, Trash2, Search, X, Calendar, MessageSquare, BarChart3, FileText, ChevronRight, Mail, Phone, Cake, Target, Activity, AlertTriangle, CheckCircle, Send, Eye, Flag, Edit } from 'lucide-react'
 
 export function AddMemberModal({ groupId, onClose, onAdded }) {
   const [search, setSearch] = useState('')
@@ -13,15 +14,14 @@ export function AddMemberModal({ groupId, onClose, onAdded }) {
   const [adding, setAdding] = useState(null)
 
   useEffect(() => {
-    if (search.length < 2) { setResults([]); return }
     const timer = setTimeout(async () => {
       try {
-        const data = await api.get(`/api/data/students?search=${encodeURIComponent(search)}`)
-        setResults(data.students || data || [])
+        const data = await api.get(`/api/data/available?group_id=${groupId}&search=${encodeURIComponent(search)}`)
+        setResults(data.students || [])
       } catch { setResults([]) }
     }, 300)
     return () => clearTimeout(timer)
-  }, [search])
+  }, [search, groupId])
 
   const handleAdd = async (student) => {
     setAdding(student.id)
@@ -228,12 +228,13 @@ export function MemberDetailPanel({ member, group, onClose }) {
   )
 }
 
-export function GroupOverviewTabs({ group, reports, currentUser }) {
+export function GroupOverviewTabs({ group, reports, currentUser, onUpdated }) {
   const [activeTab, setActiveTab] = useState('overview')
   const [comments, setComments] = useState([])
   const [loadingComments, setLoadingComments] = useState(false)
   const [newComment, setNewComment] = useState('')
   const [postingComment, setPostingComment] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
 
   const loadComments = async () => {
     setLoadingComments(true)
@@ -300,7 +301,18 @@ export function GroupOverviewTabs({ group, reports, currentUser }) {
 
       {activeTab === 'overview' && (
         <div>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Group Overview</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Group Overview</h3>
+            {(currentUser?.role === 'Admin' || currentUser?.role === 'TechSupport') && (
+              <button 
+                className="btn btn-ghost btn-sm" 
+                onClick={() => setShowEditModal(true)}
+                style={{ height: 28, padding: '0 8px', gap: 4 }}
+              >
+                <Edit size={14} /> Edit Group
+              </button>
+            )}
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Campus</div>
@@ -308,7 +320,7 @@ export function GroupOverviewTabs({ group, reports, currentUser }) {
             </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Cohort</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>2026 Q1</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{group.cohort || '2026 Q1'}</div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Facilitator</div>
@@ -319,6 +331,14 @@ export function GroupOverviewTabs({ group, reports, currentUser }) {
               <div style={{ fontSize: 14, fontWeight: 600 }}>{group.co_facilitator_name || '—'}</div>
             </div>
           </div>
+
+          {showEditModal && (
+            <EditGroupModal 
+              group={group} 
+              onClose={() => setShowEditModal(false)} 
+              onUpdated={onUpdated} 
+            />
+          )}
         </div>
       )}
 
@@ -556,10 +576,10 @@ export default function GroupDetail() {
           ) : (
             <div style={{ maxHeight: 500, overflowY: 'auto' }}>
               {filteredMembers.map((m, i) => {
-                const attendancePercentage = Math.floor(Math.random() * 100) // Mock for now
+                const attendancePercentage = m.percentage || 0
                 return (
                   <div
-                    key={m.id || m.student_id || i}
+                    key={m.id || m.membership_id || m.student_id || i}
                     onClick={() => setSelectedMember(m)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12,
@@ -581,14 +601,14 @@ export default function GroupDetail() {
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Attendance</div>
                         <div style={{ fontSize: 13, fontWeight: 600 }}>
-                          {Math.floor(attendancePercentage / 10)}/7 sessions · {attendancePercentage}%
+                          {m.attended || 0}/{m.total || 0} sessions · {attendancePercentage}%
                         </div>
                       </div>
                       <AttendanceRing percentage={attendancePercentage} size={40} />
                       {(hasRole('Admin') || hasRole('Coordinator') || hasRole('TechSupport')) && (
                         <button
                           className="btn btn-ghost btn-icon btn-sm"
-                          onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id || m.student_id); }}
+                          onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id || m.membership_id || m.student_id); }}
                           title="Remove"
                         >
                           <Trash2 size={14} style={{ color: 'var(--danger)' }} />
@@ -611,7 +631,7 @@ export default function GroupDetail() {
               onClose={() => setSelectedMember(null)}
             />
           ) : (
-            <GroupOverviewTabs group={group} reports={reports} />
+            <GroupOverviewTabs group={group} reports={reports} currentUser={user} onUpdated={loadData} />
           )}
         </div>
       </div>

@@ -44,8 +44,8 @@ export default function TechSupport() {
     if (search.length < 2) { setResults([]); return }
     const timer = setTimeout(async () => {
       try {
-        const data = await api.get(`/api/data/users?search=${encodeURIComponent(search)}&type=all&limit=20`)
-        setResults(data.users || data || [])
+        const data = await api.get(`/api/thinkific/search?q=${encodeURIComponent(search)}`)
+        setResults(data.users || [])
       } catch { setResults([]) }
     }, 300)
     return () => clearTimeout(timer)

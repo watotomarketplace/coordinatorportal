@@ -166,20 +166,31 @@ router.get('/:id', requireAuth, async (req, res) => {
             }
         }
 
-        // Get members
+        // Get members with attendance calculation
         let members = await dbAll(`
-            SELECT fgm.id as membership_id, fgm.student_id, fgm.student_name, fgm.student_email, fgm.joined_at
+            SELECT fgm.id as membership_id, fgm.student_id, fgm.student_name, fgm.student_email, fgm.joined_at,
+                (SELECT COUNT(*) FROM session_attendance sa 
+                 JOIN group_sessions gs ON sa.session_id = gs.id 
+                 WHERE sa.student_id = fgm.student_id 
+                 AND gs.formation_group_id = fgm.formation_group_id 
+                 AND sa.attended = 1 AND gs.did_not_meet = 0) as attended,
+                (SELECT COUNT(*) FROM group_sessions gs 
+                 WHERE gs.formation_group_id = fgm.formation_group_id 
+                 AND gs.did_not_meet = 0) as total
             FROM formation_group_members fgm
             WHERE fgm.formation_group_id = ?
             ORDER BY fgm.joined_at
         `, [req.params.id])
 
-        // Enhance members with real Thinkific data
+        // Enhance members with real Thinkific data and calculate stable percentage
         members = members.map(m => {
             const detail = getStudentById(m.student_id)
+            const percentage = m.total > 0 ? Math.round((m.attended / m.total) * 100) : 0
+            
             if (detail) {
                 return {
                     ...m,
+                    percentage, // Use stable DB-calculated percentage
                     progress: detail.progress,
                     risk_category: detail.risk_category,
                     daysInactive: detail.daysInactive,
@@ -188,7 +199,7 @@ router.get('/:id', requireAuth, async (req, res) => {
                     risk: detail.risk
                 }
             }
-            return m
+            return { ...m, percentage }
         })
 
         // Get weekly reports for this group
@@ -277,63 +288,80 @@ router.post('/', requireAuth, async (req, res) => {
     }
 })
 
-// --- UPDATE GROUP (any authenticated user) ---
-router.put('/:id', requireAuth, async (req, res) => {
+// --- UPDATE GROUP (Admin, TechSupport only) ---
+/**
+ * PUT /api/formation-groups/:id
+ * Allows Admins and TechSupport to update group metadata (facilitator, campus, cohort, etc.)
+ */
+router.put('/:id', requireAdminOrTechSupport, async (req, res) => {
     try {
         const user = req.session.user
-
-        const { name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
         const { id } = req.params
+        const { group_code, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
 
-        const group = await dbGet('SELECT id, celebration_point, facilitator_user_id, co_facilitator_user_id FROM formation_groups WHERE id = ?', [id])
+        const group = await dbGet('SELECT * FROM formation_groups WHERE id = ?', [id])
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' })
         }
 
-        // Campus-scoped users can only update groups at their own campus (except Facilitator/CoFacilitator who access via assignment)
-        if (CAMPUS_SCOPED_ROLES.includes(user.role) && user.role !== 'Facilitator' && user.role !== 'CoFacilitator') {
-            if (user.celebration_point && group.celebration_point !== user.celebration_point) {
-                return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
-            }
-        }
-        // Facilitators/CoFacilitators can only update groups they are assigned to
-        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-            if (group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
-                return res.status(403).json({ success: false, message: 'You can only update groups you are assigned to' })
-            }
+        // TechSupport can only update groups at their own campus
+        if (user.role === 'TechSupport' && user.celebration_point && group.celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: 'You can only update groups at your assigned campus' })
         }
 
-        // Validate co-facilitator is different from main facilitator
-        const finalFacilitator = facilitator_user_id !== undefined ? facilitator_user_id : null
-        const finalCoFacilitator = co_facilitator_user_id !== undefined ? co_facilitator_user_id : null
-        if (finalFacilitator && finalCoFacilitator && finalFacilitator === finalCoFacilitator) {
-            return res.status(400).json({ success: false, message: 'Co-facilitator must be different from the main facilitator' })
+        // If changing campus, TechSupport must stay within their own
+        if (celebration_point && user.role === 'TechSupport' && celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: 'You cannot move a group to another campus' })
+        }
+
+        // Validate group code format if provided
+        let finalCode = group.group_code
+        if (group_code) {
+            const normalised = group_code.trim().toUpperCase()
+            const match = normalised.match(/^([A-Z]{3})(\d+)$/)
+            if (!match) {
+                return res.status(400).json({ success: false, message: 'Invalid group code format (e.g. WDT01)' })
+            }
+            finalCode = normalised
+        }
+
+        // Validate facilitator/co-facilitator different
+        if (facilitator_user_id && co_facilitator_user_id && facilitator_user_id === co_facilitator_user_id) {
+            return res.status(400).json({ success: false, message: 'Facilitator and Co-facilitator must be different' })
+        }
+
+        // Validate facilitator campus matches group campus (unless Admin)
+        if (facilitator_user_id && user.role !== 'Admin') {
+            const fac = await dbGet('SELECT celebration_point FROM users WHERE id = ?', [facilitator_user_id])
+            if (fac && fac.celebration_point !== (celebration_point || group.celebration_point)) {
+                return res.status(400).json({ success: false, message: 'Facilitator must belong to the same campus as the group' })
+            }
         }
 
         await dbRun(
             `UPDATE formation_groups 
-             SET name = group_code, 
+             SET group_code = ?,
+                 name = ?, 
                  celebration_point = COALESCE(?, celebration_point),
-                 facilitator_user_id = COALESCE(?, facilitator_user_id),
+                 facilitator_user_id = ?,
                  co_facilitator_user_id = ?,
                  cohort = COALESCE(?, cohort),
                  active = COALESCE(?, active)
              WHERE id = ?`,
             [
-                celebration_point !== undefined ? celebration_point : null,
-                facilitator_user_id !== undefined ? facilitator_user_id : null,
-                co_facilitator_user_id !== undefined ? co_facilitator_user_id : null,
-                cohort !== undefined ? cohort : null,
-                active !== undefined ? active : null,
+                finalCode,
+                finalCode, // name always equals group_code
+                celebration_point || null,
+                facilitator_user_id !== undefined ? facilitator_user_id : group.facilitator_user_id,
+                co_facilitator_user_id !== undefined ? co_facilitator_user_id : group.co_facilitator_user_id,
+                cohort !== undefined ? cohort : group.cohort,
+                active !== undefined ? active : group.active,
                 id
             ]
         )
 
-        // Invalidate caching
         await invalidatePattern('cache:dashboard:*')
-        await invalidatePattern('cache:students:*')
-
-        res.json({ success: true })
+        res.json({ success: true, message: 'Group updated successfully' })
     } catch (error) {
         console.error('Update group error:', error)
         res.status(500).json({ success: false, message: 'Failed to update group' })

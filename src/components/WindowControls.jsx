@@ -36,9 +36,10 @@ export default function WindowControls({ title }) {
       padding: '12px 16px',
       borderBottom: '1px solid rgba(255,255,255,0.08)',
       background: 'rgba(255,255,255,0.02)', // slight tint for titlebar
+      WebkitAppRegion: 'drag', // macOS draggable window support
     }}>
       {/* Traffic Lights */}
-      <div style={{ display: 'flex', gap: '8px', zIndex: 10 }}>
+      <div style={{ display: 'flex', gap: '8px', zIndex: 10, WebkitAppRegion: 'no-drag' }}>
         {/* Close (Red) */}
         <div 
           onClick={handleClose}

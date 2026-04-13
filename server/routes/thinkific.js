@@ -1,5 +1,6 @@
 import express from 'express'
-import { getUnenrolledUsers, enrollUser, getCacheStatus, testConnection, forceRefresh, rawTestConnection } from '../services/thinkific.js'
+import { getUnenrolledUsers, enrollUser, getCacheStatus, testConnection, forceRefresh, rawTestConnection, searchStudents } from '../services/thinkific.js'
+import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
 
 const router = express.Router()
 
@@ -13,6 +14,18 @@ function requireAdmin(req, res, next) {
     }
     next()
 }
+
+// GET /api/thinkific/search
+router.get('/search', requireAuth, applyCampusScope, (req, res) => {
+    try {
+        const { q } = req.query
+        const celebrationPoint = req.scopedCelebrationPoint
+        const results = searchStudents(q, celebrationPoint)
+        res.json({ success: true, users: results })
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
 
 // GET /api/thinkific/unenrolled
 // Returns users who have a Company but are not enrolled in the target course

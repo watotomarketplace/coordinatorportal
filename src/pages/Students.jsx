@@ -206,16 +206,17 @@ export default function Students() {
   const filtered = useMemo(() => {
     let list = students
     if (search) {
-      const q = search.toLowerCase()
+      const q = (search || '').toLowerCase().trim()
       list = list.filter(s =>
         (s.first_name || '').toLowerCase().includes(q) ||
         (s.last_name || '').toLowerCase().includes(q) ||
         (s.email || '').toLowerCase().includes(q) ||
-        (s.name || '').toLowerCase().includes(q)
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.student_name || '').toLowerCase().includes(q)
       )
     }
-    if (filter === 'active') list = list.filter(s => s.daysInactive < 14)
-    if (filter === 'inactive') list = list.filter(s => s.daysInactive >= 14)
+    if (filter === 'active') list = list.filter(s => (s.daysInactive || 0) < 14)
+    if (filter === 'inactive') list = list.filter(s => (s.daysInactive || 0) >= 14)
     if (filter === 'at-risk') list = list.filter(s => s.risk_category === 'Critical' || s.risk_category === 'Attention')
     if (filter === 'on-track') list = list.filter(s => (s.progress || s.percentage_completed || 0) >= 75)
     return list

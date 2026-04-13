@@ -59,38 +59,39 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         let topGroups = []
         let reportingStats = { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
 
-        // Fetch attendance trend (last 6 months or 13 weeks)
-        // PostgreSQL is strict: cast only if format matches YYYY-MM-DD
-        const weekSelector = IS_POSTGRES 
-            ? "CASE WHEN session_date ~ '^\\d{4}-\\d{2}-\\d{2}' THEN TO_CHAR(session_date::DATE, 'IYYY\"-\"IW') ELSE '0000-00' END" 
-            : "strftime('%Y-%W', session_date)"
-        const floatCast = IS_POSTGRES ? "DECIMAL" : "FLOAT"
-
+        // Fetch attendance trend (last 13 weeks)
         const attendanceTrend = await dbAll(`
-            SELECT ${weekSelector} as week, 
+            SELECT gs.week_number as week, 
                    COUNT(*) as session_count,
                    AVG(CAST((SELECT COUNT(*) FROM session_attendance WHERE session_id = gs.id AND attended = 1) AS ${floatCast}) / 
                        NULLIF((SELECT COUNT(*) FROM group_members WHERE formation_group_id = gs.formation_group_id AND active = 1), 0)) * 100 as avg_att
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
-            AND ${weekSelector} != '0000-00'
+            AND gs.week_number BETWEEN 1 AND 13
             GROUP BY 1
-            ORDER BY 1 DESC
-            LIMIT 13
+            ORDER BY 1 ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        attendanceStats.trend = attendanceTrend.reverse().map(t => ({
-            label: `Week ${(t.week || '').split('-')[1] || '??'}`,
-            value: Math.round(t.avg_att || 0)
+        // Ensure 13 data points (weeks 1-13)
+        const attendanceByWeek = Array.from({ length: 13 }, (_, i) => ({
+            label: `Week ${i + 1}`,
+            value: 0
         }))
+
+        attendanceTrend.forEach(t => {
+            if (t.week >= 1 && t.week <= 13) {
+                attendanceByWeek[t.week - 1].value = Math.round(t.avg_att || 0)
+            }
+        })
+
+        attendanceStats.trend = attendanceByWeek
 
         // Fetch Top Groups by Sessions
         topGroups = await dbAll(`
-            SELECT fg.name, fg.group_code, COUNT(gs.id) as sessions,
-                   (SELECT COUNT(*) FROM group_members WHERE formation_group_id = fg.id AND active = 1) as members
+            SELECT fg.name, fg.group_code, COUNT(gs.id) as sessions
             FROM formation_groups fg
-            LEFT JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
+            JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
             WHERE fg.active = 1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             GROUP BY fg.id, fg.name, fg.group_code
             ORDER BY sessions DESC
@@ -105,29 +106,40 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        const totalGroups = (await dbGet(`SELECT COUNT(*) as count FROM formation_groups WHERE active = 1 ${celebrationPoint ? 'AND celebration_point = ?' : ''}`, celebrationPoint ? [celebrationPoint] : [])).count || 1
+        const totalGroupsResult = await dbGet(`SELECT COUNT(*) as count FROM formation_groups WHERE active = 1 ${celebrationPoint ? 'AND celebration_point = ?' : ''}`, celebrationPoint ? [celebrationPoint] : [])
+        const totalGroups = totalGroupsResult?.count || 1
         
         reportingStats.totalReports = reports.length
         reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns && r.pastoral_concerns.length > 0 && r.pastoral_concerns !== '0' && r.pastoral_concerns !== 'false').length
         reportingStats.compliance = Math.round((reports.length / (totalGroups * 13)) * 100) // Rough estimation across 13 weeks
 
-        // Engagement/Pastoral trend over weeks
+        // Engagement/Pastoral trend over weeks (1-13)
         const reportTrend = await dbAll(`
             SELECT week_number, 
                    COUNT(*) as count,
                    SUM(CASE WHEN pastoral_concerns IS NOT NULL AND pastoral_concerns != '' AND pastoral_concerns != '0' AND pastoral_concerns != 'false' THEN 1 ELSE 0 END) as concerns
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
-            WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            WHERE wr.week_number BETWEEN 1 AND 13 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             GROUP BY week_number
             ORDER BY week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        reportingStats.trends = reportTrend.map(t => ({
-            week: t.week_number,
-            reports: t.count,
-            concerns: t.concerns
+        // Ensure 13 data points for reporting trends
+        const trendsByWeek = Array.from({ length: 13 }, (_, i) => ({
+            week: i + 1,
+            reports: 0,
+            concerns: 0
         }))
+
+        reportTrend.forEach(t => {
+            if (t.week_number >= 1 && t.week_number <= 13) {
+                trendsByWeek[t.week_number - 1].reports = t.count
+                trendsByWeek[t.week_number - 1].concerns = t.concerns
+            }
+        })
+
+        reportingStats.trends = trendsByWeek
 
         res.json({
             success: true,
@@ -245,6 +257,48 @@ router.get('/inactive', requireAuth, applyCampusScope, async (req, res) => {
     } catch (error) {
         console.error('Get inactive students error:', error)
         res.status(500).json({ success: false, message: 'Failed to load inactive students' })
+    }
+})
+
+// Get available students for a group (not already in a group, filtered by campus)
+router.get('/available', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const { group_id, search } = req.query
+        const celebrationPoint = req.scopedCelebrationPoint
+        
+        // 1. Get all students from cache for this campus
+        const result = await getStudentData(celebrationPoint)
+        const allStudents = result.students || []
+
+        // 2. Get IDs of students already in ANY group
+        const assigned = await dbAll('SELECT student_id FROM formation_group_members')
+        const assignedIds = new Set(assigned.map(a => String(a.student_id)))
+
+        // 3. Filter: not assigned to any group
+        let available = allStudents.filter(s => {
+            const id = String(s.id || s.userId)
+            return !assignedIds.has(id)
+        })
+
+        // 4. Filter by search if provided
+        if (search) {
+            const q = search.toLowerCase()
+            available = available.filter(s => 
+                (s.first_name || '').toLowerCase().includes(q) ||
+                (s.last_name || '').toLowerCase().includes(q) ||
+                (s.name || '').toLowerCase().includes(q) ||
+                (s.email || '').toLowerCase().includes(q)
+            )
+        }
+
+        res.json({
+            success: true,
+            students: available.slice(0, 50), // Limit to 50 for UI performance
+            total: available.length
+        })
+    } catch (error) {
+        console.error('Get available students error:', error)
+        res.status(500).json({ success: false, message: 'Failed to load available students' })
     }
 })
 

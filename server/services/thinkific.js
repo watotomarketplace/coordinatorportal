@@ -893,6 +893,19 @@ export async function createUser(firstName, lastName, email, company, password, 
     }
 }
 
+export function searchStudents(query, celebrationPoint = null) {
+    if (!cache.data) return []
+    const q = (query || '').toLowerCase()
+    return cache.data.filter(s => {
+        const matchesQuery = (s.name || '').toLowerCase().includes(q) || 
+                             (s.email || '').toLowerCase().includes(q) ||
+                             (s.first_name || '').toLowerCase().includes(q) ||
+                             (s.last_name || '').toLowerCase().includes(q)
+        const matchesCampus = !celebrationPoint || s.celebration_point === celebrationPoint
+        return matchesQuery && matchesCampus
+    }).slice(0, 50)
+}
+
 export async function updateUser(userId, data) {
     const client = await createClient()
     try {

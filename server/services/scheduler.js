@@ -3,6 +3,7 @@ import cron from 'node-cron'
 import { dbAll, dbRun, dbGet } from '../db/init.js'
 import { generateAllCheckpoints } from './checkpoints.js'
 import { notifyOverdueReports, notifyCheckpointReady } from './notifications.js'
+import { getCacheStatus, forceRefresh } from './thinkific.js'
 
 /**
  * Scheduler Service
@@ -14,7 +15,8 @@ import { notifyOverdueReports, notifyCheckpointReady } from './notifications.js'
 // --- Configuration ---
 const CRON_SCHEDULES = {
     OVERDUE_CHECK: '0 9 * * *',      // Daily at 9:00 AM
-    CHECKPOINT_GEN: '0 4 * * 1'      // Weekly on Monday at 4:00 AM
+    CHECKPOINT_GEN: '0 4 * * 1',     // Weekly on Monday at 4:00 AM
+    THINKIFIC_SYNC: '*/5 * * * *'    // Every 5 minutes
 }
 
 let tasks = []
@@ -46,6 +48,20 @@ export async function initScheduler() {
         }
     })
     tasks.push(checkpointTask)
+
+    // 3. Fallback Thinkific Background Sync (if Redis isn't configured)
+    if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
+        console.log('⏰ Adding fallback node-cron Thinkific Sync (every 5 mins)')
+        const thinkificTask = cron.schedule(CRON_SCHEDULES.THINKIFIC_SYNC, async () => {
+            console.log('⏰ Running fallback Thinkific sync...')
+            try {
+                await forceRefresh()
+            } catch (error) {
+                console.error('❌ Thinkific sync failed:', error)
+            }
+        })
+        tasks.push(thinkificTask)
+    }
 
     console.log(`✅ Scheduler initialized with ${tasks.length} active tasks.`)
 }

@@ -2,6 +2,7 @@ import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES } from '../middleware/rbac.js'
 import { syncWeeklyReports, getSyncStatus, restartAutoSync } from '../services/notion-sync.js'
+import { invalidatePattern } from '../services/cache.js'
 
 const router = express.Router()
 
@@ -51,7 +52,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
 // --- GET REPORT DETAIL ---
 router.get('/sync-status', requireAuth, async (req, res) => {
     try {
-        const status = await getSyncStatus()  // 2705 FIX: was missing await
+        const status = await getSyncStatus()
         res.json({ success: true, ...status })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to get sync status' })
@@ -168,6 +169,9 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.post('/sync', requireAdmin, async (req, res) => {
     try {
         const status = await syncWeeklyReports()
+        // Aggregates will change on new reports
+        await invalidatePattern('cache:dashboard:*')
+        await invalidatePattern('cache:students:*')
         res.json({ success: true, ...status })
     } catch (error) {
         console.error('Manual sync error:', error)

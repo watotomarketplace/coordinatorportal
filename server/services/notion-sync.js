@@ -39,7 +39,7 @@ const RETRY_CONFIG = {
 
 async function getNotionConfig() {
     const apiKey  = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_api_key'")
-    const dbId    = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_db_id'")
+    const dbId    = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_database_id'")
     const interval = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_sync_interval'")
 
     const effectiveApiKey = apiKey?.value || process.env.NOTION_API_KEY

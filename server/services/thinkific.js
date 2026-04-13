@@ -15,18 +15,39 @@ let cache = {
     data: null, // Enrolled students
     unenrolled: [], // Potential students
     timestamp: 0,
+    lastSyncAttempt: 0,
+    lastSyncSuccess: 0,
+    syncError: null,
     duration: 1 * 60 * 1000 // 1 minute — near-real-time data
 }
 
 // ═══════════════════════════════════════════════════════
 // THINKIFIC API CLIENT
 // ═══════════════════════════════════════════════════════
-function createClient() {
+import { dbGet } from '../db/init.js'
+
+async function getThinkificConfig() {
+    try {
+        const apiKeyRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_api_key'")
+        const subdomainRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_subdomain'")
+        
+        const apiKey = apiKeyRow?.value || process.env.THINKIFIC_API_KEY
+        const subdomain = subdomainRow?.value || process.env.THINKIFIC_SUBDOMAIN
+        
+        return { apiKey, subdomain }
+    } catch (err) {
+        return { apiKey: process.env.THINKIFIC_API_KEY, subdomain: process.env.THINKIFIC_SUBDOMAIN }
+    }
+}
+
+async function createClient() {
+    const { apiKey, subdomain } = await getThinkificConfig()
+    
     return axios.create({
-        baseURL: 'https://api.thinkific.com/api/public/v1',
+        baseURL: `https://api.thinkific.com/api/public/v1`,
         headers: {
-            'X-Auth-API-Key': process.env.THINKIFIC_API_KEY,
-            'X-Auth-Subdomain': process.env.THINKIFIC_SUBDOMAIN,
+            'X-Auth-API-Key': apiKey,
+            'X-Auth-Subdomain': subdomain,
             'Content-Type': 'application/json'
         },
         timeout: 15000
@@ -85,17 +106,21 @@ function normalizeCelebrationPoint(rawCompany) {
 // DATA FETCHING — Rate-limit aware
 // ═══════════════════════════════════════════════════════
 async function fetchAllPages(endpoint, params = {}) {
-    const client = createClient()
+    const client = await createClient()
     let allItems = []
 
     try {
         const firstRes = await client.get(endpoint, {
             params: { ...params, page: 1, limit: 50 }
         })
-        allItems = [...firstRes.data.items]
-        const totalPages = firstRes.data.meta?.pagination?.total_pages || 1
-        const totalItems = firstRes.data.meta?.pagination?.total_items || allItems.length
-        console.log(`   📄 ${endpoint}: ${totalItems} items, ${totalPages} pages`)
+        const dataPayload = firstRes.data;
+        allItems = [...(dataPayload.items || [])]
+        
+        // Safely extract total pages from Thinkific's raw payload
+        const rawMeta = dataPayload.meta;
+        const totalPages = rawMeta?.pagination?.total_pages || rawMeta?.total_pages || 1;
+        const totalItems = rawMeta?.pagination?.total_items || rawMeta?.total_items || allItems.length;
+        console.log(`   📄 ${endpoint}: ${totalItems} items, ${totalPages} pages found.`);
 
         if (totalPages > 1) {
             const pages = []
@@ -111,7 +136,7 @@ async function fetchAllPages(endpoint, params = {}) {
                             const res = await client.get(endpoint, {
                                 params: { ...params, page, limit: 50 }
                             })
-                            return res.data.items
+                            return res.data.items || []
                         } catch (err) {
                             const is429 = err.response?.status === 429
                             const wait = is429 ? 5000 * attempt : 1000 * attempt
@@ -141,6 +166,11 @@ async function fetchAllPages(endpoint, params = {}) {
             console.log(`   ✅ ${endpoint}: All ${allItems.length} fetched`)
         }
     } catch (error) {
+        if (error.response?.status === 401) {
+            console.error(`   ❌ ${endpoint} 401 Unauthorized. Disabling sync until credentials updated.`)
+            cache.syncError = '401 Unauthorized - Check API Keys'
+            throw error // Hard fail
+        }
         console.error(`   ❌ ${endpoint} failed: ${error.message}`)
     }
 
@@ -169,7 +199,9 @@ async function loadCache() {
 
 async function saveCache() {
     try {
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache), 'utf8')
+        const tmpPath = CACHE_FILE + '.tmp'
+        fs.writeFileSync(tmpPath, JSON.stringify(cache), 'utf8')
+        fs.renameSync(tmpPath, CACHE_FILE) // Atomic write
         console.log(`💾 Saved ${cache.data.length} records to disk cache`)
     } catch (error) {
         console.error('Failed to save disk cache:', error.message)
@@ -362,6 +394,14 @@ async function doRefresh(fullSync = false) {
             const params = {}
             if (isIncremental) {
                 params['query[updated_after]'] = since
+            }
+
+            cache.lastSyncAttempt = Date.now()
+            
+            // If we are hard-blocked by 401, reject entirely
+            if (cache.syncError && cache.syncError.includes('401')) {
+                console.error('Sync aborted due to existing 401 errors. Fix credentials to resume.')
+                return
             }
 
             // Sequential fetch — one endpoint at a time to respect rate limits
@@ -611,6 +651,8 @@ async function doRefresh(fullSync = false) {
                 cache.data = finalStudents
                 cache.unenrolled = finalUnenrolled
                 cache.timestamp = Date.now()
+                cache.lastSyncSuccess = Date.now()
+                cache.syncError = null
                 saveCache()
 
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
@@ -624,6 +666,9 @@ async function doRefresh(fullSync = false) {
 
         } catch (error) {
             console.error('❌ Refresh error:', error.message)
+            if (error.response?.status !== 401) {
+                cache.syncError = error.message
+            }
             // DON'T throw — keep old cache intact
         }
     })()
@@ -742,8 +787,28 @@ export function getChartData(students) {
     return { progressDistribution, completionStatus, courseProgress, riskDistribution, engagement: null }
 }
 
+// Helper methods from PRD
+export function getAllStudents() {
+    return cache.data || []
+}
+
+export function getStudentById(id) {
+    const students = cache.data || []
+    return students.find(s => String(s.id) === String(id) || String(s.userId) === String(id)) || null
+}
+
+export function getStudentProgress(studentId) {
+    const student = getStudentById(studentId)
+    return student ? {
+        progress: student.progress || 0,
+        percentage_completed: student.percentage_completed || 0,
+        last_sign_in: student.last_sign_in_at,
+        course: student.course
+    } : null
+}
+
 export async function enrollUser(userId, courseId = 3300782) {
-    const client = createClient()
+    const client = await createClient()
     try {
         // Default Course ID for Watoto Leadership 101: 3300782
         // Sanitize incoming courseId (might be a string from CSV. If invalid/empty, fallback to default)
@@ -778,7 +843,7 @@ export async function enrollUser(userId, courseId = 3300782) {
 }
 
 export async function createUser(firstName, lastName, email, company, password, sendWelcomeEmail = false) {
-    const client = createClient()
+    const client = await createClient()
     try {
         const payload = {
             first_name: firstName,
@@ -818,7 +883,7 @@ export async function createUser(firstName, lastName, email, company, password, 
 }
 
 export async function updateUser(userId, data) {
-    const client = createClient()
+    const client = await createClient()
     try {
         // data can contain { first_name, last_name, company, etc }
         const response = await client.put(`/users/${userId}`, data)
@@ -842,3 +907,74 @@ export async function updateUser(userId, data) {
         return { success: false, message: errorMsg }
     }
 }
+
+// ═══════════════════════════════════════════════════════
+// ADMIN HELPERS & WEBHOOKS
+// ═══════════════════════════════════════════════════════
+export function getCacheStatus() {
+    return {
+        cacheSize: cache.data ? cache.data.length : 0,
+        lastSync: cache.lastSyncSuccess,
+        lastAttempt: cache.lastSyncAttempt,
+        error: cache.syncError
+    }
+}
+
+export async function testConnection(apiKey, subdomain) {
+    try {
+        const client = axios.create({
+            baseURL: 'https://api.thinkific.com/api/public/v1',
+            headers: {
+                'X-Auth-API-Key': apiKey,
+                'X-Auth-Subdomain': subdomain,
+                'Content-Type': 'application/json'
+            },
+            timeout: 5000
+        })
+        const res = await client.get('/courses?limit=1')
+        return { success: true, message: "Connected successfully", meta: res.data.meta }
+    } catch (e) {
+        if (e.response?.status === 401) throw new Error("401 Unauthorized - Invalid API Key or Subdomain")
+        throw new Error(e.message || "Failed to connect to Thinkific")
+    }
+}
+
+export async function processWebhookPayload(topic, payload) {
+    console.log(`[Thinkific Webhook] Processing ${topic}...`)
+    // Force minor increment window back-dated 5 minutes
+    cache.timestamp = Math.max(0, Date.now() - (5 * 60 * 1000))
+    triggerBackgroundRefresh()
+}
+
+export async function rawTestConnection() {
+    console.log('[Diagnostic] Running GET /users?limit=1')
+    try {
+        const { apiKey, subdomain } = await getThinkificConfig()
+        const client = axios.create({
+            baseURL: `https://api.thinkific.com/api/public/v1`,
+            headers: {
+                'X-Auth-API-Key': apiKey,
+                'X-Auth-Subdomain': subdomain,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        })
+        const res = await client.get('/users?limit=1')
+        return { 
+            success: true, 
+            status: res.status, 
+            headers: res.headers, 
+            data: res.data 
+        }
+    } catch (e) {
+        return {
+            success: false,
+            status: e.response?.status,
+            headers: e.response?.headers,
+            data: e.response?.data,
+            message: e.message
+        }
+    }
+}
+
+

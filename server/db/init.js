@@ -19,18 +19,23 @@ export function getDatabase() {
 }
 
 export async function initDatabase() {
-  // CRITICAL: Force purge the local Thinkific cache file on boot.
-  // This breaks the incremental sync loop where corrupted Promise objects 
-  // (caused by previous async codemods) were continually copied over to the new cache,
-  // ultimately crashing the React frontend with Error #31.
+  // Validate cache file integrity on boot — only purge if corrupted
   try {
     const cachePath = join(__dirname, 'cache.json')
     if (existsSync(cachePath)) {
-      unlinkSync(cachePath)
-      console.log('🧹 Purged thinkific cache.json to clear any corrupted data')
+      try {
+        const raw = readFileSync(cachePath, 'utf8')
+        JSON.parse(raw) // Validate JSON structure
+        console.log('✅ Cache file is valid, keeping it')
+      } catch (parseErr) {
+        console.log('🧹 Cache file corrupted, purging:', parseErr.message)
+        unlinkSync(cachePath)
+      }
+    } else {
+      console.log('📭 No cache file found, will create on first sync')
     }
   } catch (err) {
-    console.error('⚠️ Failed to purge cache.json:', err.message)
+    console.error('⚠️ Failed to validate cache.json:', err.message)
   }
 
   if (IS_POSTGRES) {
@@ -66,6 +71,46 @@ export async function initDatabase() {
 async function runMigrations() {
   function getPK() { return IS_POSTGRES ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT' }
   const ALL_ROLES = "'Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'CoFacilitator', 'Facilitator', 'TechSupport'"
+
+  // Fix roles CHECK constraint if needed (SQLite doesn't support ALTER TABLE for constraints)
+  if (!IS_POSTGRES) {
+    try {
+      const usersSchema = await dbGet("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+      if (usersSchema && !usersSchema.sql.includes('CoFacilitator')) {
+        console.log('🔄 Migrating users table to include CoFacilitator role...')
+        await dbRun("BEGIN TRANSACTION")
+        await dbRun("ALTER TABLE users RENAME TO users_old")
+        await dbRun(`
+          CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN (${ALL_ROLES})),
+            celebration_point TEXT,
+            profile_image TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            roles TEXT,
+            secondary_roles TEXT DEFAULT '[]',
+            preferences TEXT DEFAULT '{}'
+          )
+        `)
+        // Copy columns that exist in users_old
+        const cols = await dbAll("PRAGMA table_info(users_old)")
+        const colNames = cols.map(c => c.name).filter(n => n !== 'preferences' || usersSchema.sql.includes('preferences'))
+        const joinedCols = colNames.join(', ')
+        await dbRun(`INSERT INTO users (${joinedCols}) SELECT ${joinedCols} FROM users_old`)
+        await dbRun("DROP TABLE users_old")
+        await dbRun("COMMIT")
+        console.log('✅ Users table migration complete')
+      }
+    } catch (e) {
+      console.error('Failed to migrate users table:', e.message)
+      try { await dbRun("ROLLBACK") } catch (_) {}
+    }
+  }
 
   await dbRun(`
     CREATE TABLE IF NOT EXISTS notes (
@@ -167,6 +212,12 @@ async function runMigrations() {
     )
   `)
 
+  try {
+    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_api_key', '')")
+    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_database_id', '')")
+    await dbRun("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('notion_sync_interval', '5')")
+  } catch(e) { }
+
   await dbRun(`
     CREATE TABLE IF NOT EXISTS discernment_checkpoints (
       id ${getPK()},
@@ -211,7 +262,10 @@ async function runMigrations() {
         profile_image TEXT,
         active INTEGER DEFAULT 1,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        roles TEXT,
+        secondary_roles TEXT DEFAULT '[]',
+        preferences TEXT DEFAULT '{}'
       )
     `)
 
@@ -275,6 +329,9 @@ async function runMigrations() {
 
   // ─── Multi-Role: add secondary_roles column (JSON array) ───
   try { await dbRun("ALTER TABLE users ADD COLUMN secondary_roles TEXT DEFAULT '[]'") } catch (_) {}
+
+  // ─── User Preferences: add preferences column (JSON) ───
+  try { await dbRun("ALTER TABLE users ADD COLUMN preferences TEXT DEFAULT '{}'") } catch (_) {}
 
   // ─── Co-Facilitator: add second facilitator column to formation_groups ───
   try { await dbRun('ALTER TABLE formation_groups ADD COLUMN co_facilitator_user_id INTEGER') } catch (_) {}

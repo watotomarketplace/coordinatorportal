@@ -37,6 +37,7 @@ router.post('/login', async (req, res) => {
             name: user.name,
             role: user.role,
             roles: rolesArray,
+            secondary_roles: user.secondary_roles,
             celebration_point: user.celebration_point,
             profile_image: user.profile_image
         }

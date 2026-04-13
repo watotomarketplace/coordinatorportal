@@ -3,6 +3,12 @@ import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAdmin } from '../middleware/rbac.js'
 import { restartAutoSync, getSyncStatus } from '../services/notion-sync.js'
 import { Client as NotionClient } from '@notionhq/client'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const router = express.Router()
 
@@ -30,7 +36,7 @@ router.get('/', requireAdmin, async (req, res) => {
 // --- UPDATE SETTINGS (Admin only) ---
 router.put('/', requireAdmin, async (req, res) => {
     try {
-        const { notion_api_key, notion_db_id, notion_sync_interval } = req.body
+        const { notion_api_key, notion_database_id, notion_sync_interval } = req.body
 
         const upsert = async (key, value) => {
             if (value === undefined) return
@@ -43,55 +49,51 @@ router.put('/', requireAdmin, async (req, res) => {
         }
 
         if (notion_api_key !== undefined) await upsert('notion_api_key', notion_api_key)
-        if (notion_db_id !== undefined) await upsert('notion_db_id', notion_db_id)
+        if (notion_database_id !== undefined) await upsert('notion_database_id', notion_database_id)
         if (notion_sync_interval !== undefined) await upsert('notion_sync_interval', String(notion_sync_interval))
+        
+        if (req.body.current_week !== undefined) {
+            await upsert('current_week', String(req.body.current_week))
+        }
 
         // Restart auto-sync with new settings
         restartAutoSync()
 
-        res.json({ success: true, message: 'Settings updated. Notion sync restarted.' })
+        res.json({ success: true, message: 'Settings updated.' })
     } catch (error) {
         console.error('Update settings error:', error)
         res.status(500).json({ success: false, message: 'Failed to update settings' })
     }
 })
 
-// --- TEST NOTION CONNECTION (Admin only) ---
-router.post('/test-notion', requireAdmin, async (req, res) => {
+// --- ADD CELEBRATION POINT (Admin only) ---
+router.post('/campuses', requireAdmin, async (req, res) => {
     try {
-        const apiKey = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_api_key'")
-        const dbId = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_db_id'")
-
-        const effectiveApiKey = apiKey?.value || process.env.NOTION_API_KEY
-        const effectiveDbId   = dbId?.value   || process.env.NOTION_DB_ID
-
-        if (!effectiveApiKey || !effectiveDbId) {
-            return res.json({ success: false, message: 'Notion credentials not configured' })
+        const { campus } = req.body
+        if (!campus || !campus.trim()) {
+            return res.status(400).json({ success: false, message: 'Campus name is required' })
         }
-
-        const notion = new NotionClient({ auth: effectiveApiKey })
-
-        // Try querying the database (just 1 page to test)
-        const response = await notion.databases.query({
-            database_id: effectiveDbId,
-            page_size: 1
-        })
-
-        const propertyNames = response.results.length > 0
-            ? Object.keys(response.results[0].properties)
-            : []
-
-        res.json({
-            success: true,
-            message: `Connected! Database has ${response.results.length > 0 ? 'entries' : 'no entries yet'}.`,
-            totalResults: response.results.length,
-            properties: propertyNames
-        })
+        
+        const newCampus = campus.trim()
+        
+        const serverPath = path.join(__dirname, '../constants/campuses.js')
+        const clientPath = path.join(__dirname, '../../src/constants/campuses.js')
+        
+        for (const filePath of [serverPath, clientPath]) {
+            if (fs.existsSync(filePath)) {
+                let content = fs.readFileSync(filePath, 'utf8')
+                // Basic insert before the last closing bracket
+                if (!content.includes(`'${newCampus}'`) && !content.includes(`"${newCampus}"`)) {
+                    content = content.replace(/\]\s*;/g, `,\n  '${newCampus}'\n];`)
+                    fs.writeFileSync(filePath, content, 'utf8')
+                }
+            }
+        }
+        
+        res.json({ success: true, message: 'Campus added successfully' })
     } catch (error) {
-        res.json({
-            success: false,
-            message: error.message || 'Failed to connect to Notion'
-        })
+        console.error('Add campus error:', error)
+        res.status(500).json({ success: false, message: 'Failed to add campus' })
     }
 })
 

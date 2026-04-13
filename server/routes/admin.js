@@ -6,6 +6,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { requireAdminOrLeadership } from '../middleware/rbac.js'
 import { sendLoginEmail, isEmailConfigured } from '../services/email.js'
+import { CELEBRATION_POINTS } from '../constants/campuses.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -69,11 +70,18 @@ router.get('/users', requireUserManager, async (req, res) => {
         }
 
         // Parse roles into arrays for the frontend
-        users = users.map(u => ({
-            ...u,
-            roles: u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role],
-            secondary_roles: (() => { try { return JSON.parse(u.secondary_roles || '[]') } catch { return [] } })()
-        }))
+        const groupAssignments = await dbAll('SELECT id, group_code, facilitator_user_id, co_facilitator_user_id FROM formation_groups')
+        
+        users = users.map(u => {
+            const userGroups = groupAssignments.filter(g => g.facilitator_user_id === u.id || g.co_facilitator_user_id === u.id)
+            return {
+                ...u,
+                roles: u.roles ? u.roles.split(',').map(r => r.trim()) : [u.role],
+                secondary_roles: (() => { try { return JSON.parse(u.secondary_roles || '[]') } catch { return [] } })(),
+                assigned_groups: userGroups.map(g => g.id),
+                assigned_group_codes: userGroups.map(g => g.group_code)
+            }
+        })
 
         res.json({ success: true, users })
     } catch (error) {
@@ -132,6 +140,11 @@ router.post('/users', requireUserManager, async (req, res) => {
             return res.json({ success: false, message: 'Campus-scoped roles must have a Celebration Point' })
         }
 
+        // Validate campus is a known Celebration Point
+        if (finalCelebrationPoint && !CELEBRATION_POINTS.includes(finalCelebrationPoint)) {
+            return res.json({ success: false, message: `Invalid Celebration Point: ${finalCelebrationPoint}. Must be one of: ${CELEBRATION_POINTS.join(', ')}` })
+        }
+
         // Check if username exists (case-insensitive)
         const existing = await dbGet('SELECT id FROM users WHERE LOWER(username) = ?', [username])
         if (existing) {
@@ -169,8 +182,20 @@ router.post('/users', requireUserManager, async (req, res) => {
             'INSERT INTO users (username, password, name, role, roles, secondary_roles, celebration_point, profile_image, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
             [username, hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, selectedImage || null]
         )
+        const userId = result.lastInsertRowid
 
-        res.json({ success: true, userId: result.lastInsertRowid })
+        // Handle assigned groups for facilitators
+        if (Array.isArray(req.body.assigned_groups) && req.body.assigned_groups.length > 0) {
+            for (const groupId of req.body.assigned_groups) {
+                if (primaryRole === 'Facilitator' || rolesList.includes('Facilitator')) {
+                    await dbRun('UPDATE formation_groups SET facilitator_user_id = ? WHERE id = ?', [userId, groupId])
+                } else if (primaryRole === 'CoFacilitator' || rolesList.includes('CoFacilitator')) {
+                    await dbRun('UPDATE formation_groups SET co_facilitator_user_id = ? WHERE id = ?', [userId, groupId])
+                }
+            }
+        }
+
+        res.json({ success: true, userId })
     } catch (error) {
         console.error('Create user error:', error)
         res.json({ success: false, message: 'Failed to create user' })
@@ -382,14 +407,29 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
         if (password) {
             const hashedPassword = bcrypt.hashSync(password, 10)
             await dbRun(
-                'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, req.body.profile_image || null, id]
+                'UPDATE users SET password = ?, name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, id]
             )
         } else {
             await dbRun(
-                'UPDATE users SET name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                [name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, req.body.profile_image || null, id]
+                'UPDATE users SET name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, id]
             )
+        }
+
+        // Handle assigned groups for facilitators
+        // Clear old assignments (wherever this user was facilitator or co-facilitator)
+        await dbRun('UPDATE formation_groups SET facilitator_user_id = NULL WHERE facilitator_user_id = ?', [id])
+        await dbRun('UPDATE formation_groups SET co_facilitator_user_id = NULL WHERE co_facilitator_user_id = ?', [id])
+
+        if (Array.isArray(req.body.assigned_groups) && req.body.assigned_groups.length > 0) {
+            for (const groupId of req.body.assigned_groups) {
+                if (primaryRole === 'Facilitator' || rolesList.includes('Facilitator')) {
+                    await dbRun('UPDATE formation_groups SET facilitator_user_id = ? WHERE id = ?', [id, groupId])
+                } else if (primaryRole === 'CoFacilitator' || rolesList.includes('CoFacilitator')) {
+                    await dbRun('UPDATE formation_groups SET co_facilitator_user_id = ? WHERE id = ?', [id, groupId])
+                }
+            }
         }
 
         res.json({ success: true })

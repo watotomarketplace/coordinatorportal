@@ -1,10 +1,11 @@
 import express from 'express'
-import { getStudentData, getChartData, getStats, forceRefresh, getPaginatedUsers } from '../services/thinkific.js'
+import { getStudentData, getChartData, getStats, forceRefresh, getPaginatedUsers, getStudentById, getStudentProgress } from '../services/thinkific.js'
 import { getNotes, addNote, getGroupNotes, addGroupNote } from '../services/notes.js'
 import { getStudentTags, getAllTags, addTag, removeTag, removeTagByName, TAG_COLORS } from '../services/tags.js'
 import { logAudit } from '../services/audit.js'
 import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
-import { dbAll } from '../db/init.js'
+import { dbAll, dbGet } from '../db/init.js'
+import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
 
@@ -18,17 +19,152 @@ const ROLE_NOTE_TYPE_MAP = {
     TechSupport: 'tech_note'
 }
 
+// Get dashboard stats (Total Enrolled, Active, etc.)
+router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const user = req.session.user
+        const celebrationPoint = req.scopedCelebrationPoint
+
+        const result = await getStudentData(celebrationPoint)
+        
+        let students = result.students || []
+
+        // Facilitators: filter to only students in their assigned groups
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+            const members = await dbAll(`
+                SELECT fgm.student_id, fgm.student_name, fgm.student_email
+                FROM formation_group_members fgm
+                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
+                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
+            `, [user.id, user.id])
+
+            const memberIds = new Set(members.map(m => String(m.student_id)))
+            const memberEmails = new Set(members.filter(m => m.student_email).map(m => m.student_email.toLowerCase()))
+
+            students = students.filter(s => {
+                if (s.id && memberIds.has(String(s.id))) return true
+                if (s.userId && memberIds.has(String(s.userId))) return true
+                if (s.email && memberEmails.has(s.email.toLowerCase())) return true
+                return false
+            })
+        }
+
+        const stats = getStats(students)
+        const chartData = getChartData(students)
+
+        // ═══════════════════════════════════════════════════════
+        // ADD ATTENDANCE & REPORTING OVERLAYS (Part 2)
+        // ═══════════════════════════════════════════════════════
+        let attendanceStats = { avgAttendance: 0, totalSessions: 0, trend: [] }
+        let topGroups = []
+        let reportingStats = { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
+
+        // Fetch attendance trend (last 6 months or 13 weeks)
+        const attendanceTrend = await dbAll(`
+            SELECT strftime('%Y-%W', session_date) as week, 
+                   COUNT(*) as session_count,
+                   AVG(CAST((SELECT COUNT(*) FROM session_attendance WHERE session_id = gs.id AND attended = 1) AS FLOAT) / 
+                       NULLIF((SELECT COUNT(*) FROM group_members WHERE formation_group_id = gs.formation_group_id AND active = 1), 0)) * 100 as avg_att
+            FROM group_sessions gs
+            JOIN formation_groups fg ON gs.formation_group_id = fg.id
+            WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            GROUP BY week
+            ORDER BY week DESC
+            LIMIT 13
+        `, celebrationPoint ? [celebrationPoint] : [])
+
+        attendanceStats.trend = attendanceTrend.reverse().map(t => ({
+            label: `Week ${t.week.split('-')[1]}`,
+            value: Math.round(t.avg_att || 0)
+        }))
+
+        // Fetch Top Groups by Sessions
+        topGroups = await dbAll(`
+            SELECT fg.name, fg.group_code, COUNT(gs.id) as sessions,
+                   (SELECT COUNT(*) FROM group_members WHERE formation_group_id = fg.id AND active = 1) as members
+            FROM formation_groups fg
+            LEFT JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
+            WHERE fg.active = 1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            GROUP BY fg.id
+            ORDER BY sessions DESC
+            LIMIT 5
+        `, celebrationPoint ? [celebrationPoint] : [])
+
+        // Fetch Reporting Stats from Notion cache
+        const reports = await dbAll(`
+            SELECT wr.*, fg.celebration_point
+            FROM weekly_reports wr
+            JOIN formation_groups fg ON wr.formation_group_id = fg.id
+            WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+        `, celebrationPoint ? [celebrationPoint] : [])
+
+        const totalGroups = (await dbGet(`SELECT COUNT(*) as count FROM formation_groups WHERE active = 1 ${celebrationPoint ? 'AND celebration_point = ?' : ''}`, celebrationPoint ? [celebrationPoint] : [])).count || 1
+        
+        reportingStats.totalReports = reports.length
+        reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns === 1 || r.pastoral_concerns === true).length
+        reportingStats.compliance = Math.round((reports.length / (totalGroups * 13)) * 100) // Rough estimation across 13 weeks
+
+        // Engagement/Pastoral trend over weeks
+        const reportTrend = await dbAll(`
+            SELECT week_number, 
+                   COUNT(*) as count,
+                   SUM(CASE WHEN pastoral_concerns = 1 THEN 1 ELSE 0 END) as concerns
+            FROM weekly_reports wr
+            JOIN formation_groups fg ON wr.formation_group_id = fg.id
+            WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            GROUP BY week_number
+            ORDER BY week_number ASC
+        `, celebrationPoint ? [celebrationPoint] : [])
+
+        reportingStats.trends = reportTrend.map(t => ({
+            week: t.week_number,
+            reports: t.count,
+            concerns: t.concerns
+        }))
+
+        res.json({
+            success: true,
+            totalStudents: stats.totalStudents,
+            activeStudents: stats.activeStudents,
+            atRiskCount: stats.atRiskStudents,
+            completedStudents: stats.healthyStudents, 
+            avgProgress: stats.averageProgress,
+            inactiveCount: stats.totalStudents - stats.activeStudents,
+            
+            // Chart Data Overlays
+            progressDistribution: chartData.progressDistribution,
+            atRiskDist: chartData.riskDistribution,
+            completionStatus: chartData.completionStatus,
+            courseProgress: chartData.courseProgress,
+            
+            // New Operational Layers
+            attendanceStats,
+            topGroups,
+            formationStats: reportingStats
+        })
+    } catch (e) {
+        console.error('Stats endpoint error', e)
+        res.status(500).json({ success: false, message: 'Failed to fetch stats' })
+    }
+})
+
 // Get student data
 router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
 
+        const cacheKey = `cache:students:${user.id}:${celebrationPoint || 'global'}`
+        const cachedRes = await getCache(cacheKey)
+        if (cachedRes) {
+            return res.json(cachedRes)
+        }
+
         const result = await getStudentData(celebrationPoint)
         let students = result.students || []
 
         // Facilitators: filter to only students in their assigned groups
-        if (user.role === 'Facilitator') {
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
             const members = await dbAll(`
                 SELECT fgm.student_id, fgm.student_name, fgm.student_email
                 FROM formation_group_members fgm
@@ -50,13 +186,15 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
         const stats = getStats(students)
         const chartData = getChartData(students)
 
-        res.json({
+        const payload = {
             success: true,
             students,
             stats,
             chartData,
             lastUpdated: result.lastUpdated
-        })
+        }
+        await setCache(cacheKey, payload, 300) // 5 Min TTL
+        res.json(payload)
     } catch (error) {
         console.error('Get students error:', error)
         res.json({ success: false, message: 'Failed to load student data' })
@@ -100,6 +238,30 @@ router.get('/inactive', requireAuth, applyCampusScope, async (req, res) => {
     } catch (error) {
         console.error('Get inactive students error:', error)
         res.status(500).json({ success: false, message: 'Failed to load inactive students' })
+    }
+})
+
+// Get individual student details
+router.get('/students/:id', requireAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const student = await getStudentById(id);
+        
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found in cache' });
+        }
+
+        const notes = await getNotes(id);
+        const progress = getStudentProgress(id);
+
+        res.json({ 
+            success: true, 
+            student: { ...student, ...progress }, 
+            notes: notes || [] 
+        });
+    } catch (error) {
+        console.error('Get student details error:', error);
+        res.status(500).json({ success: false, message: 'Failed to load student details' });
     }
 })
 

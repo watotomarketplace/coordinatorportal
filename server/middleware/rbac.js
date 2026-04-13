@@ -13,6 +13,8 @@
  *   Facilitator      → Group-scoped (Phase 2+)
  */
 
+import { CELEBRATION_POINTS } from '../constants/campuses.js'
+
 // --- Constants ---
 
 // Roles that are scoped to a single campus (celebration_point)
@@ -122,26 +124,26 @@ export function applyCampusScope(req, res, next) {
         return res.status(401).json({ success: false, message: 'Not authenticated' })
     }
 
-    const roles = getUserRoles(req.session.user)
-    const requestedCampus = req.query.celebration_point || req.body?.celebration_point || ''
-
-    // If the user has ANY global role, grant global access
-    const hasGlobalRole = roles.some(r => GLOBAL_ROLES.includes(r))
+    const user = req.session.user
+    const hasGlobalRole = userHasAnyRole(user, GLOBAL_ROLES)
+    // Support either formal parameter naming or generic campus filter
+    const requestedCampus = req.query.campus || req.query.celebration_point || req.body?.celebration_point || ''
 
     if (hasGlobalRole) {
-        // Global roles can filter by any campus or see all
-        req.scopedCelebrationPoint = requestedCampus
-    } else if (roles.some(r => CAMPUS_SCOPED_ROLES.includes(r))) {
-        // Campus-scoped roles are locked to their assignment
-        if (requestedCampus && requestedCampus !== req.session.user.celebration_point) {
+        if (requestedCampus && CELEBRATION_POINTS.includes(requestedCampus)) {
+            req.scopedCelebrationPoint = requestedCampus
+        } else {
+            req.scopedCelebrationPoint = null // Explicit global
+        }
+    } else if (userHasAnyRole(user, CAMPUS_SCOPED_ROLES)) {
+        if (requestedCampus && requestedCampus !== user.celebration_point) {
             return res.status(403).json({
                 success: false,
                 message: 'Unauthorized: Access restricted to your assigned Campus.'
             })
         }
-        req.scopedCelebrationPoint = req.session.user.celebration_point
+        req.scopedCelebrationPoint = user.celebration_point
     } else {
-        // Unknown role — deny
         return res.status(403).json({ success: false, message: 'Unknown role' })
     }
 

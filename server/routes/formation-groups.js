@@ -2,8 +2,16 @@ import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole, userHasRole } from '../middleware/rbac.js'
 import { getGroupNotes, addGroupNote } from '../services/notes.js'
+import { invalidatePattern } from '../services/cache.js'
+import { getStudentById } from '../services/thinkific.js'
 
 const router = express.Router()
+
+// Ensure all responses have proper Content-Type for JSON APIs
+router.use((req, res, next) => {
+    res.setHeader('Content-Type', 'application/json')
+    next()
+})
 
 // --- Campus Code Mapping ---
 const CAMPUS_CODES = {
@@ -159,12 +167,29 @@ router.get('/:id', requireAuth, async (req, res) => {
         }
 
         // Get members
-        const members = await dbAll(`
+        let members = await dbAll(`
             SELECT fgm.id as membership_id, fgm.student_id, fgm.student_name, fgm.student_email, fgm.joined_at
             FROM formation_group_members fgm
             WHERE fgm.formation_group_id = ?
             ORDER BY fgm.joined_at
         `, [req.params.id])
+
+        // Enhance members with real Thinkific data
+        members = members.map(m => {
+            const detail = getStudentById(m.student_id)
+            if (detail) {
+                return {
+                    ...m,
+                    progress: detail.progress,
+                    risk_category: detail.risk_category,
+                    daysInactive: detail.daysInactive,
+                    lastActivity: detail.lastActivity,
+                    status: detail.status,
+                    risk: detail.risk
+                }
+            }
+            return m
+        })
 
         // Get weekly reports for this group
         const reports = await dbAll(`
@@ -177,9 +202,11 @@ router.get('/:id', requireAuth, async (req, res) => {
             ORDER BY wr.week_number DESC
         `, [req.params.id])
 
+        res.setHeader('Content-Type', 'application/json')
         res.json({ success: true, group, members, reports })
     } catch (error) {
         console.error('Get group detail error:', error)
+        res.setHeader('Content-Type', 'application/json')
         res.status(500).json({ success: false, message: 'Failed to fetch group details' })
     }
 })
@@ -302,6 +329,10 @@ router.put('/:id', requireAuth, async (req, res) => {
             ]
         )
 
+        // Invalidate caching
+        await invalidatePattern('cache:dashboard:*')
+        await invalidatePattern('cache:students:*')
+
         res.json({ success: true })
     } catch (error) {
         console.error('Update group error:', error)
@@ -354,6 +385,10 @@ router.post('/:id/members', requireAuth, async (req, res) => {
             [groupId, student_id, student_name || null, student_email || null]
         )
 
+        // Invalidate caching
+        await invalidatePattern('cache:dashboard:*')
+        await invalidatePattern('cache:students:*')
+
         res.json({ success: true })
     } catch (error) {
         console.error('Add member error:', error)
@@ -387,6 +422,10 @@ router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
             'DELETE FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
             [id, studentId]
         )
+
+        // Invalidate caching
+        await invalidatePattern('cache:dashboard:*')
+        await invalidatePattern('cache:students:*')
 
         res.json({ success: true })
     } catch (error) {

@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import session from 'express-session'
 import cors from 'cors'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import authRoutes from './routes/auth.js'
@@ -14,15 +15,21 @@ import notificationRoutes from './routes/notifications.js'
 import formationGroupRoutes from './routes/formation-groups.js'
 import weeklyReportRoutes from './routes/weekly-reports.js'
 import settingsRoutes from './routes/settings.js'
+import notionRoutes from './routes/notion.js'
 import checkpointRoutes from './routes/checkpoints.js'
 import formationDashboardRoutes from './routes/formation-dashboard.js'
 import attendanceRoutes from './routes/attendance.js'
 import techSupportRoutes from './routes/tech-support.js'
 import exportRoutes from './routes/exports.js'
+import diagnosticRoutes from './routes/diagnostics.js'
+import userPreferencesRoutes from './routes/user-preferences.js'
+import dashboardSummaryRoutes from './routes/dashboard-summary.js'
 import { initDatabase } from './db/init.js'
-import { preWarmCache } from './services/thinkific.js'
-import { startAutoSync } from './services/notion-sync.js'
+import { preWarmCache, getCacheStatus } from './services/thinkific.js'
 import { initScheduler } from './services/scheduler.js'
+import { initializeCronJobs } from './queue/index.js'
+import queueRoutes from './routes/queue.js'
+import webhookRoutes from './routes/webhooks.js'
 import compression from 'compression'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -36,10 +43,11 @@ const PORT = process.env.PORT || 3000
         await initDatabase()
 
         // Pre-warm Thinkific cache — loads disk cache instantly, refreshes in background if stale
-        preWarmCache()
+        await preWarmCache()
+        console.log(`[Thinkific] Cache contains ${getCacheStatus().cacheSize} students`);
 
-        // Start Notion auto-sync (gracefully disabled if credentials not configured)
-        startAutoSync()
+        // Start Queue-based Background Jobs (replaces direct startAutoSync)
+        await initializeCronJobs()
 
         // Start Scheduler (Cron Jobs)
         initScheduler()
@@ -83,16 +91,36 @@ app.use('/api/notifications', notificationRoutes)
 app.use('/api/formation-groups', formationGroupRoutes)
 app.use('/api/reports', weeklyReportRoutes)
 app.use('/api/settings', settingsRoutes)
+app.use('/api/notion', notionRoutes)
 app.use('/api/checkpoints', checkpointRoutes)
 app.use('/api/formation-dashboard', formationDashboardRoutes)
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/tech-support', techSupportRoutes)
 app.use('/api/exports', exportRoutes)
+app.use('/api/diagnostics', diagnosticRoutes)
+app.use('/api/user/preferences', userPreferencesRoutes)
+app.use('/api/queue', queueRoutes)
+app.use('/api/webhooks', webhookRoutes)
 app.use('/api/public', imageRoutes)
+app.use('/api/dashboard', dashboardSummaryRoutes)
 
 // Health check
-app.get('/api/health', async (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() })
+// Health check endpoint explicitly mapped
+app.get('/api/health', (req, res) => {
+    let cacheStale = true
+    try {
+        const CACHE_FILE = join(__dirname, 'db/cache.json')
+        if (fs.existsSync(CACHE_FILE)) {
+            const stats = fs.statSync(CACHE_FILE)
+            cacheStale = Date.now() - new Date(stats.mtime).getTime() > (30 * 60 * 1000)
+        }
+    } catch (e) {}
+    res.json({
+        status: cacheStale ? 'degraded' : 'healthy',
+        timestamp: new Date().toISOString(),
+        cache_stale: cacheStale,
+        uptime: process.uptime()
+    })
 })
 
 // Serve static files (pre-built React frontend)

@@ -1,6 +1,7 @@
 import express from 'express'
 import { dbGet, dbAll } from '../db/init.js'
 import { requireAuth, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
 
@@ -26,6 +27,13 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         const facilParam = user.role === 'Facilitator' ? [user.id, user.id] : []
 
         const params = [...campusParam, ...facilParam]
+
+        // Cache Key Formulation
+        const cacheKey = `cache:dashboard:formation:${user.id}:${campus || 'global'}`
+        const cachedData = await getCache(cacheKey)
+        if (cachedData) {
+            return res.json(cachedData)
+        }
 
         // --- 1. Report Submission Status ---
         const groups = await dbAll(`
@@ -136,7 +144,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             LIMIT 10
         `, params)
 
-        res.json({
+        const payload = {
             success: true,
             submissionStatus: groups,
             engagementTrend,
@@ -145,7 +153,10 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             checkpointStatus,
             campuses: complianceData,
             atRiskGroups
-        })
+        }
+
+        await setCache(cacheKey, payload, 300) // 5 Min TTL
+        res.json(payload)
     } catch (error) {
         console.error('Formation dashboard error:', error)
         res.status(500).json({ success: false, message: 'Failed to fetch formation dashboard data' })

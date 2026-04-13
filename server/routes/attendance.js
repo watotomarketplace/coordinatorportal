@@ -1,7 +1,8 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth } from '../middleware/rbac.js'
-import { getPaginatedUsers } from '../services/thinkific.js'
+import { getPaginatedUsers, getStudentById } from '../services/thinkific.js'
+import { getCache, setCache, invalidatePattern } from '../services/cache.js'
 
 const router = express.Router()
 
@@ -60,10 +61,28 @@ async function syncMembersFromFormationGroup(groupId) {
     // Upsert each formation group member into group_members
     for (const fm of fgMembers) {
         const sid = String(fm.student_id)
-        // Use stored name first; fall back to Thinkific cache; last resort show ID
-        const fallback = thinkificMap[sid] || { name: `Student ${sid}`, email: '' }
-        const name = fm.student_name || fallback.name
-        const email = fm.student_email || fallback.email
+        
+        let name = fm.student_name
+        let email = fm.student_email
+
+        // 2705 ENHANCEMENT: Use Thinkific cache if name is missing
+        if (!name) {
+            const fallback = thinkificMap[sid] || getStudentById(sid)
+            if (fallback && fallback.name && fallback.name !== `Student ${sid}`) {
+                name = fallback.name
+                email = fallback.email || email
+                
+                // Backfill formation_group_members so we don't have to keep looking it up
+                try {
+                    await dbRun(
+                        'UPDATE formation_group_members SET student_name = ?, student_email = ? WHERE student_id = ? AND formation_group_id = ?',
+                        [name, email, sid, groupId]
+                    )
+                } catch (e) {}
+            } else {
+                name = `Student ${sid}`
+            }
+        }
 
         const existing = await dbGet(
             'SELECT id FROM group_members WHERE formation_group_id = ? AND student_thinkific_id = ?',
@@ -215,6 +234,9 @@ router.post('/sessions/:sessionId/checkin', requireAuth, async (req, res) => {
                 [attendedCount, session.formation_group_id, session.week_number]
             )
         }
+        // Invalidate caching since data has mutated
+        await invalidatePattern(`cache:dashboard:*`)
+
         res.json({ success: true, attendedCount })
     } catch (error) {
         console.error('Checkin error:', error)
@@ -331,6 +353,10 @@ router.get('/dashboard', requireAuth, async (req, res) => {
         let whereClause = 'WHERE fg.active = 1'
         let params = []
 
+        const cacheKey = `cache:dashboard:attendance:${user.id}:${user.celebration_point || 'global'}`
+        const cachedPayload = await getCache(cacheKey)
+        if (cachedPayload) return res.json(cachedPayload)
+
         if (user.role === 'Facilitator') {
             whereClause += ' AND fg.facilitator_user_id = ?'
             params = [user.id]
@@ -383,11 +409,14 @@ router.get('/dashboard', requireAuth, async (req, res) => {
         const totalPossible = result.reduce((s, g) => s + g.possible, 0)
         const overallPct = totalPossible > 0 ? Math.round((totalAttended / totalPossible) * 100) : null
 
-        res.json({
+        const payload = {
             success: true,
             summary: { totalSessions, groupsWithSessions, overallPct, totalGroups: result.length },
             groups: result
-        })
+        }
+
+        await setCache(cacheKey, payload, 300)
+        res.json(payload)
     } catch (error) {
         console.error('Attendance dashboard error:', error)
         res.status(500).json({ success: false, message: 'Failed to load dashboard' })

@@ -61,8 +61,9 @@ router.get('/campus/roster', requireAuth, applyCampusScope, async (req, res) => 
         const user = req.session.user
         if (user.role === 'Facilitator') return res.status(403).json({ success: false, message: 'Campus reports not available for Facilitators' })
 
-        const campus = req.query.celebration_point || req.scopedCelebrationPoint || user.celebration_point
-        const data = await getStudentData(campus || null)
+        const isGlobal = GLOBAL_ROLES.includes(user.role)
+        const campus = req.query.celebration_point || req.scopedCelebrationPoint || (!isGlobal ? user.celebration_point : null)
+        const data = await getStudentData(campus)
         const students = data.students || []
 
         const columns = ['userId', 'first_name', 'last_name', 'email', 'celebration_point', 'course', 'progress', 'status', 'daysInactive', 'alertLevel', 'risk_score', 'risk_category', 'lastActivity', 'last_sign_in_at', 'enrolled_at']
@@ -73,14 +74,39 @@ router.get('/campus/roster', requireAuth, applyCampusScope, async (req, res) => 
     }
 })
 
+// 1.5 Groups Export
+router.get('/campus/groups', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const user = req.session.user
+        const { where, params } = buildFilters(user, req.query.celebration_point)
+        const rows = await dbAll(`
+            SELECT fg.group_code, fg.name, fg.celebration_point,
+                   u.name as facilitator_name, u2.name as co_facilitator_name,
+                   (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
+            FROM formation_groups fg
+            LEFT JOIN users u ON fg.facilitator_user_id = u.id
+            LEFT JOIN users u2 ON fg.co_facilitator_user_id = u2.id
+            WHERE 1=1 ${where}
+            ORDER BY fg.celebration_point, fg.group_code
+        `, params)
+
+        const columns = ['group_code', 'name', 'celebration_point', 'facilitator_name', 'co_facilitator_name', 'member_count']
+        sendCSV(res, `groups_${req.query.celebration_point || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, rows, columns)
+    } catch (err) {
+        console.error('Export groups error:', err)
+        res.status(500).json({ success: false, message: 'Export failed' })
+    }
+})
+
 // 2. Inactivity / Risk Report
 router.get('/campus/risk', requireAuth, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         if (user.role === 'Facilitator') return res.status(403).json({ success: false, message: 'Campus reports not available for Facilitators' })
 
-        const campus = req.query.celebration_point || req.scopedCelebrationPoint || user.celebration_point
-        const data = await getStudentData(campus || null)
+        const isGlobal = GLOBAL_ROLES.includes(user.role)
+        const campus = req.query.celebration_point || req.scopedCelebrationPoint || (!isGlobal ? user.celebration_point : null)
+        const data = await getStudentData(campus)
         const atRisk = (data.students || []).filter(s =>
             (s.risk_score && s.risk_score >= 50) || s.daysInactive > 14
         ).sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))

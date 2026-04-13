@@ -1,0 +1,1 @@
+import{j as e}from"./charts-CPlBc5Cr.js";import{r as a}from"./vendor-DjnbH-yP.js";import{u as r}from"./index-BX9BIjbm.js";import{A as o}from"./AttendanceDashboard-DU54r9uq.js";function p(){const t=r(s=>s.setPageTitle);return a.useEffect(()=>{t("Attendance")},[t]),e.jsx("div",{style:{animation:"fadeIn 0.3s ease"},children:e.jsx(o,{})})}export{p as default};

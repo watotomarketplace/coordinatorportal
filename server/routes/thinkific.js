@@ -1,5 +1,5 @@
 import express from 'express'
-import { getUnenrolledUsers, enrollUser } from '../services/thinkific.js'
+import { getUnenrolledUsers, enrollUser, getCacheStatus, testConnection, forceRefresh, rawTestConnection } from '../services/thinkific.js'
 
 const router = express.Router()
 
@@ -43,6 +43,61 @@ router.post('/enroll', requireAdmin, async (req, res) => {
     } catch (error) {
         console.error('Enrollment error:', error)
         res.status(500).json({ success: false, message: 'Enrollment failed' })
+    }
+})
+
+
+// ─── ADMIN TOOLS ──────────────────────────────────────────────────────────
+
+// GET /api/thinkific/status
+router.get('/status', requireAdmin, (req, res) => {
+    try {
+        const port = process.env.PORT || 3000
+        const webhookUrl = `${req.protocol}://${req.get('host')}/api/webhooks/thinkific`
+        res.json({ success: true, ...getCacheStatus(), webhookUrl })
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
+// POST /api/thinkific/test
+router.post('/test', requireAdmin, async (req, res) => {
+    try {
+        const { apiKey, subdomain } = req.body
+        const result = await testConnection(apiKey, subdomain)
+        res.json(result)
+    } catch (e) {
+        res.json({ success: false, message: e.message })
+    }
+})
+
+// POST /api/thinkific/refresh (Alias for backward compatibility)
+router.post('/refresh', requireAdmin, (req, res) => {
+    try {
+        forceRefresh()
+        res.json({ success: true, message: "Cache refresh triggered in background" })
+    } catch (e) {
+        res.json({ success: false, message: e.message })
+    }
+})
+
+// POST /api/thinkific/force-refresh
+router.post('/force-refresh', requireAdmin, (req, res) => {
+    try {
+        forceRefresh()
+        res.json({ success: true, message: "Cache refresh forced in background" })
+    } catch (e) {
+        res.json({ success: false, message: e.message })
+    }
+})
+
+// GET /api/thinkific/raw-test
+router.get('/raw-test', requireAdmin, async (req, res) => {
+    try {
+        const payload = await rawTestConnection()
+        res.json(payload)
+    } catch (e) {
+        res.json({ success: false, ...e })
     }
 })
 

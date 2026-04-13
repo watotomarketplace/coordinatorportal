@@ -71,7 +71,13 @@ router.get('/', requireDiagnosticsAccess, async (req, res) => {
             if (err.response) {
                 payload.connectivity.reachable = true // DNS resolved, server replied
                 payload.auth.statusCode = err.response.status
-                payload.auth.message = err.response.statusText || 'Unauthorized'
+                
+                if (err.response.status === 429) {
+                    payload.auth.authenticated = true // Recognized, just throttled
+                    payload.auth.message = 'Throttled (Rate Limit)'
+                } else {
+                    payload.auth.message = err.response.statusText || 'Unauthorized'
+                }
             } else {
                 payload.connectivity.error = err.message
                 payload.auth.message = 'Unreachable'

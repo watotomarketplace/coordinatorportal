@@ -126,8 +126,8 @@ async function fetchAllPages(endpoint, params = {}) {
             const pages = []
             for (let i = 2; i <= totalPages; i++) pages.push(i)
 
-            // Batch size 5 — safe since we only fetch one endpoint at a time
-            const BATCH_SIZE = 5
+            // Batch size 2 — more conservative for rate limits
+            const BATCH_SIZE = 2
             for (let b = 0; b < pages.length; b += BATCH_SIZE) {
                 const batch = pages.slice(b, b + BATCH_SIZE)
                 const promises = batch.map(async (page) => {
@@ -139,7 +139,7 @@ async function fetchAllPages(endpoint, params = {}) {
                             return res.data.items || []
                         } catch (err) {
                             const is429 = err.response?.status === 429
-                            const wait = is429 ? 5000 * attempt : 1000 * attempt
+                            const wait = is429 ? 8000 * attempt : 2000 * attempt
                             if (attempt < 5) {
                                 console.warn(`   ⚠️ ${endpoint} p${page} try ${attempt}/5 (${is429 ? 'rate-limited' : 'error'}, wait ${wait / 1000}s)`)
                                 await new Promise(r => setTimeout(r, wait))
@@ -153,9 +153,9 @@ async function fetchAllPages(endpoint, params = {}) {
                 const results = await Promise.all(promises)
                 results.forEach(items => { if (items) allItems.push(...items) })
 
-                // 1s delay between batches
+                // 1.5s delay between batches to stay under rate limits
                 if (b + BATCH_SIZE < pages.length) {
-                    await new Promise(r => setTimeout(r, 1000))
+                    await new Promise(r => setTimeout(r, 1500))
                 }
             }
         }
@@ -514,6 +514,8 @@ async function doRefresh(fullSync = false) {
                     // Fetching 1 user is fast.
                     try {
                         console.log(`   🔎 Fetching missing user info for ID: ${enrollment.user_id}`)
+                        // Add 200ms delay to avoid rate limit hammering
+                        await new Promise(r => setTimeout(r, 200))
                         const userRes = await createClient().get(`/users/${enrollment.user_id}`)
                         const uData = userRes.data
                         user = {

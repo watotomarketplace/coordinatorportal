@@ -126,12 +126,12 @@ async function fetchAllPages(endpoint, params = {}) {
             const pages = []
             for (let i = 2; i <= totalPages; i++) pages.push(i)
 
-            // Batch size 2 — more conservative for rate limits
-            const BATCH_SIZE = 2
+            // Sequential fetch — BATCH_SIZE 1 — respect rate limits conservatively
+            const BATCH_SIZE = 1
             for (let b = 0; b < pages.length; b += BATCH_SIZE) {
                 const batch = pages.slice(b, b + BATCH_SIZE)
                 const promises = batch.map(async (page) => {
-                    for (let attempt = 1; attempt <= 5; attempt++) {
+                    for (let attempt = 1; attempt <= 7; attempt++) {
                         try {
                             const res = await client.get(endpoint, {
                                 params: { ...params, page, limit: 50 }
@@ -139,12 +139,17 @@ async function fetchAllPages(endpoint, params = {}) {
                             return res.data.items || []
                         } catch (err) {
                             const is429 = err.response?.status === 429
-                            const wait = is429 ? 8000 * attempt : 2000 * attempt
-                            if (attempt < 5) {
-                                console.warn(`   ⚠️ ${endpoint} p${page} try ${attempt}/5 (${is429 ? 'rate-limited' : 'error'}, wait ${wait / 1000}s)`)
+                            const retryAfter = err.response?.headers['retry-after']
+                            // Wait exponentially: 10s, 20s, 40s... or use Retry-After header
+                            let wait = is429 ? (retryAfter ? parseInt(retryAfter) * 1000 : 10000 * Math.pow(2, attempt - 1)) : 2000 * attempt
+                            // Cap at 1 minute
+                            wait = Math.min(wait, 60000)
+
+                            if (attempt < 7) {
+                                console.warn(`   ⚠️ ${endpoint} p${page} try ${attempt}/7 (${is429 ? 'rate-limited' : 'error'}, wait ${Math.round(wait / 1000)}s)`)
                                 await new Promise(r => setTimeout(r, wait))
                             } else {
-                                console.error(`   ❌ ${endpoint} p${page} FAILED after 5 attempts`)
+                                console.error(`   ❌ ${endpoint} p${page} FAILED after 7 attempts`)
                                 return []
                             }
                         }
@@ -153,9 +158,9 @@ async function fetchAllPages(endpoint, params = {}) {
                 const results = await Promise.all(promises)
                 results.forEach(items => { if (items) allItems.push(...items) })
 
-                // 1.5s delay between batches to stay under rate limits
+                // 2s delay between individual requests to stay under burst limits
                 if (b + BATCH_SIZE < pages.length) {
-                    await new Promise(r => setTimeout(r, 1500))
+                    await new Promise(r => setTimeout(r, 2000))
                 }
             }
         }
@@ -229,12 +234,16 @@ export async function getStudentData(filterCelebrationPoint = null) {
         }
     }
 
-    // Step 3: No data at all — must block and fetch
-    console.log('🆕 No cached data found — fetching fresh (this takes ~60-90s)...')
-    await doRefresh()
+    // Step 3: No data at all — trigger refresh but DON'T block for minutes
+    if (!refreshPromise) {
+        console.log('🆕 No cached data found — starting background fetch...')
+        doRefresh().catch(err => console.error('❌ First-run sync failed:', err.message))
+    }
+
     return {
-        students: filterData(cache.data, filterCelebrationPoint),
-        lastUpdated: cache.timestamp
+        students: [],
+        lastUpdated: 0,
+        syncing: true // Signal to frontend that data is coming
     }
 }
 

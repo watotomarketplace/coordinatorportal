@@ -13,6 +13,13 @@ const __dirname = path.dirname(__filename)
 const router = express.Router()
 const CACHE_FILE = path.join(__dirname, '../db/cache.json')
 
+// Simple memory cache for API health check to avoid hitting rate limits
+let apiHealthCache = {
+    data: null,
+    timestamp: 0,
+    TTL: 60000 // 1 minute
+}
+
 async function getThinkificConfig() {
     try {
         const apiKeyRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_api_key'")
@@ -56,32 +63,42 @@ router.get('/', requireDiagnosticsAccess, async (req, res) => {
     payload.auth = { authenticated: false, statusCode: null, message: null }
 
     if (apiKey && subdomain) {
-        try {
-            const apiRes = await axios.get(`https://api.thinkific.com/api/public/v1/courses?limit=1`, {
-                headers: { 'X-Auth-API-Key': apiKey, 'X-Auth-Subdomain': subdomain },
-                timeout: 5000
-            })
-            payload.connectivity.reachable = true
-            payload.connectivity.latencyMs = Date.now() - start
-            payload.auth.authenticated = true
-            payload.auth.statusCode = apiRes.status
-            payload.auth.message = 'OK'
-        } catch (err) {
-            payload.connectivity.latencyMs = Date.now() - start
-            if (err.response) {
-                payload.connectivity.reachable = true // DNS resolved, server replied
-                payload.auth.statusCode = err.response.status
-                
-                if (err.response.status === 429) {
-                    payload.auth.authenticated = true // Recognized, just throttled
-                    payload.auth.message = 'Throttled (Rate Limit)'
+        // Use cached API check if fresh
+        if (apiHealthCache.data && (Date.now() - apiHealthCache.timestamp < apiHealthCache.TTL)) {
+            console.log('[Diagnostics] Using cached API health check')
+            payload.connectivity = { ...apiHealthCache.data.connectivity, cached: true }
+            payload.auth = { ...apiHealthCache.data.auth, cached: true }
+        } else {
+            try {
+                const apiRes = await axios.get(`https://api.thinkific.com/api/public/v1/courses?limit=1`, {
+                    headers: { 'X-Auth-API-Key': apiKey, 'X-Auth-Subdomain': subdomain },
+                    timeout: 8000
+                })
+                payload.connectivity.reachable = true
+                payload.connectivity.latencyMs = Date.now() - start
+                payload.auth.authenticated = true
+                payload.auth.statusCode = apiRes.status
+                payload.auth.message = 'OK'
+            } catch (err) {
+                payload.connectivity.latencyMs = Date.now() - start
+                if (err.response) {
+                    payload.connectivity.reachable = true // DNS resolved, server replied
+                    payload.auth.statusCode = err.response.status
+                    
+                    if (err.response.status === 429) {
+                        payload.auth.authenticated = true // Recognized, just throttled
+                        payload.auth.message = 'Throttled (Rate Limit)'
+                    } else {
+                        payload.auth.message = err.response.statusText || 'Unauthorized'
+                    }
                 } else {
-                    payload.auth.message = err.response.statusText || 'Unauthorized'
+                    payload.connectivity.error = err.message
+                    payload.auth.message = 'Unreachable'
                 }
-            } else {
-                payload.connectivity.error = err.message
-                payload.auth.message = 'Unreachable'
             }
+            // Update cache
+            apiHealthCache.data = { connectivity: payload.connectivity, auth: payload.auth }
+            apiHealthCache.timestamp = Date.now()
         }
     } else {
         payload.auth.message = 'Missing credentials'

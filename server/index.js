@@ -105,18 +105,25 @@ app.use('/api/dashboard', dashboardSummaryRoutes)
 // Health check
 // Health check endpoint explicitly mapped
 app.get('/api/health', (req, res) => {
-    let cacheStale = true
+    let cacheStale = false
+    let cacheMissing = false
     try {
         const CACHE_FILE = join(__dirname, 'db/cache.json')
         if (fs.existsSync(CACHE_FILE)) {
             const stats = fs.statSync(CACHE_FILE)
-            cacheStale = Date.now() - new Date(stats.mtime).getTime() > (30 * 60 * 1000)
+            // Stale only if older than 1 hour
+            cacheStale = Date.now() - new Date(stats.mtime).getTime() > (60 * 60 * 1000)
+        } else {
+            cacheMissing = true
         }
     } catch (e) {}
+    
+    // Always return 200 OK for Render health checks unless the server is literally crashing
     res.json({
-        status: cacheStale ? 'degraded' : 'healthy',
+        status: (cacheStale || cacheMissing) ? 'syncing' : 'healthy',
         timestamp: new Date().toISOString(),
         cache_stale: cacheStale,
+        cache_missing: cacheMissing,
         uptime: process.uptime()
     })
 })

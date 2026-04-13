@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Download } from 'lucide-react';
 import GroupAttendance from './GroupAttendance.jsx';
+import AttendanceRing from './AttendanceRing.jsx';
+import { exportToCSV } from '../lib/export';
 
 const glass = { background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', border: '1px solid var(--glass-border)', borderRadius: 16 }
 
@@ -14,22 +17,6 @@ function StatCard({ icon, label, value, sub, color }) {
         </div>
     )
 }
-
-function AttBadge({ pct }) {
-    if (pct === null || pct === undefined) return <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>No data</span>
-    const color = pct >= 80 ? '#34d399' : pct >= 60 ? '#fbbf24' : '#f87171'
-    return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden', minWidth: 60 }}>
-                <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.4s' }} />
-            </div>
-            <span style={{ fontSize: 13, fontWeight: 700, color, minWidth: 36, textAlign: 'right' }}>{pct}%</span>
-        </div>
-    )
-}
-
-// ─── Dashboard Widget ─────────────────────────────────────────────────────────
-// Compact attendance summary card injected into the main Dashboard page
 
 function AttBar({ pct }) {
     if (pct === null || pct === undefined) {
@@ -194,7 +181,6 @@ export default function AttendanceDashboard() {
             try {
                 const sessionRes = await fetch('/api/auth/session')
                 const sessionData = await sessionRes.json()
-                // /api/auth/session returns { user } — no success field
                 if (!sessionData.user) {
                     setError('Not authenticated')
                     return
@@ -203,8 +189,6 @@ export default function AttendanceDashboard() {
             } catch (err) {
                 setError('Not authenticated')
                 return
-            } finally {
-                // don't setLoading yet — still need dashboard data
             }
 
             try {
@@ -214,12 +198,10 @@ export default function AttendanceDashboard() {
                     setSummary(dashData.summary)
                     setGroups(dashData.groups || [])
                 } else {
-                    // API error — still show dashboard with zeros
                     setSummary({ totalSessions: 0, groupsWithSessions: 0, overallPct: null, totalGroups: 0 })
                 }
             } catch (err) {
                 console.error('AttendanceDashboard dashboard fetch error:', err)
-                // Show dashboard with zeros rather than an error screen
                 setSummary({ totalSessions: 0, groupsWithSessions: 0, overallPct: null, totalGroups: 0 })
             } finally {
                 setLoading(false)
@@ -259,67 +241,122 @@ export default function AttendanceDashboard() {
     }
 
     return (
-        <div className="tahoe-page">
-            {/* Header */}
-            <div style={{ marginBottom: 24 }}>
-                <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>📅 Attendance Overview</h2>
-                <p style={{ margin: '4px 0 0', color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>Session attendance across all formation groups</p>
-            </div>
-
-            {/* Summary cards */}
-            {summary && (
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 28 }}>
-                    <StatCard icon="📋" label="Total Sessions" value={summary.totalSessions} sub="across all groups" />
-                    <StatCard icon="🏘️" label="Groups Tracked" value={`${summary.groupsWithSessions} / ${summary.totalGroups}`} sub="have recorded sessions" />
-                    <StatCard
-                        icon="✅" label="Overall Attendance"
-                        value={summary.overallPct !== null ? `${summary.overallPct}%` : '—'}
-                        sub="average across sessions"
-                        color={summary.overallPct >= 80 ? '#34d399' : summary.overallPct >= 60 ? '#fbbf24' : summary.overallPct !== null ? '#f87171' : undefined}
-                    />
-                </div>
-            )}
-
-            {/* Campus filter */}
+        <div className="tahoe-page" style={{ display: 'flex', gap: 24 }}>
+            {/* Campus Filter Sidebar */}
             {campuses.length > 1 && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                    <button onClick={() => setCampusFilter('')} style={{ padding: '5px 14px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.15)', background: !campusFilter ? '#4A9EFF' : 'rgba(255,255,255,0.06)', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>All</button>
-                    {campuses.map(c => (
-                        <button key={c} onClick={() => setCampusFilter(c)} style={{ padding: '5px 14px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.15)', background: campusFilter === c ? '#4A9EFF' : 'rgba(255,255,255,0.06)', color: 'white', cursor: 'pointer', fontSize: 12 }}>{c}</button>
-                    ))}
+                <div style={{ width: 200, flexShrink: 0 }}>
+                    <div style={{ position: 'sticky', top: 20 }}>
+                        <h3 style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12, paddingLeft: 8 }}>Campuses</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <button
+                                onClick={() => setCampusFilter('')}
+                                style={{
+                                    textAlign: 'left', padding: '10px 14px', borderRadius: 10, border: 'none',
+                                    background: !campusFilter ? 'rgba(74,158,255,0.15)' : 'transparent',
+                                    color: !campusFilter ? '#4A9EFF' : 'var(--text-primary)',
+                                    fontSize: 13, fontWeight: !campusFilter ? 700 : 500, cursor: 'pointer',
+                                }}
+                                onMouseEnter={e => !campusFilter ? null : e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                onMouseLeave={e => !campusFilter ? null : e.currentTarget.style.background = 'transparent'}
+                            >
+                                All Campuses
+                            </button>
+                            {campuses.map(c => (
+                                <button
+                                    key={c}
+                                    onClick={() => setCampusFilter(c)}
+                                    style={{
+                                        textAlign: 'left', padding: '10px 14px', borderRadius: 10, border: 'none',
+                                        background: campusFilter === c ? 'rgba(74,158,255,0.15)' : 'transparent',
+                                        color: campusFilter === c ? '#4A9EFF' : 'var(--text-primary)',
+                                        fontSize: 13, fontWeight: campusFilter === c ? 700 : 500, cursor: 'pointer',
+                                    }}
+                                    onMouseEnter={e => campusFilter === c ? null : e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                    onMouseLeave={e => campusFilter === c ? null : e.currentTarget.style.background = 'transparent'}
+                                >
+                                    {c}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             )}
 
-            {/* Groups grid */}
-            {filteredGroups.length === 0 ? (
-                <div style={{ ...glass, padding: 48, textAlign: 'center' }}>
-                    <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-                    <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, marginBottom: 6 }}>No sessions recorded yet</div>
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>Open a Formation Group and use the Attendance section to record your first session</div>
+            {/* Main Content */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Header */}
+                <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>📅 Attendance Overview</h2>
+                        <p style={{ margin: '4px 0 0', color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>Session attendance across all formation groups</p>
+                    </div>
+                    <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => exportToCSV(filteredGroups, 'attendance-summary.csv')}
+                    >
+                        <Download size={14} style={{ marginRight: 6 }} /> Export
+                    </button>
                 </div>
-            ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-                    {filteredGroups.map(g => (
-                        <div key={g.id} onClick={() => { setSelectedGroupId(g.id); setSelectedGroupName(`${g.group_code} — ${g.name}`) }}
-                            style={{ ...glass, padding: '16px 18px', cursor: 'pointer', transition: 'border-color 0.2s', borderColor: 'rgba(255,255,255,0.12)' }}
-                            onMouseEnter={e => e.currentTarget.style.borderColor = '#4A9EFF'}
-                            onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'}
-                        >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                                <div>
-                                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{g.group_code}</div>
-                                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>{g.celebration_point}</div>
+
+                {/* Summary cards */}
+                {summary && (
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 28 }}>
+                        <StatCard icon="📋" label="Total Sessions" value={summary.totalSessions} sub="across all groups" />
+                        <StatCard icon="🏘️" label="Groups Tracked" value={`${summary.groupsWithSessions} / ${summary.totalGroups}`} sub="have recorded sessions" />
+                        <StatCard
+                            icon="✅" label="Overall Attendance"
+                            value={summary.overallPct !== null ? `${summary.overallPct}%` : '—'}
+                            sub="average across sessions"
+                            color={summary.overallPct >= 80 ? '#34d399' : summary.overallPct >= 60 ? '#fbbf24' : summary.overallPct !== null ? '#f87171' : undefined}
+                        />
+                    </div>
+                )}
+
+                {/* Groups grid */}
+                {filteredGroups.length === 0 ? (
+                    <div style={{ ...glass, padding: 48, textAlign: 'center' }}>
+                        <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+                        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, marginBottom: 6 }}>No sessions recorded yet</div>
+                        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>Open a Formation Group and use the Attendance section to record your first session</div>
+                    </div>
+                ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                        {filteredGroups.map(g => (
+                            <div key={g.id} onClick={() => { setSelectedGroupId(g.id); setSelectedGroupName(`${g.group_code} — ${g.name}`) }}
+                                style={{ ...glass, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', borderColor: 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}
+                                onMouseEnter={e => {
+                                    e.currentTarget.style.borderColor = 'rgba(74,158,255,0.4)'
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+                                    e.currentTarget.style.transform = 'translateY(-2px)'
+                                }}
+                                onMouseLeave={e => {
+                                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
+                                    e.currentTarget.style.transform = 'none'
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                                    <div>
+                                        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{g.group_code}</div>
+                                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 2, fontWeight: 500 }}>{g.celebration_point}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{g.total_sessions} sessions</div>
+                                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginTop: 1 }}>{g.member_count} members</div>
+                                    </div>
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>{g.total_sessions} session{g.total_sessions !== 1 ? 's' : ''}</div>
-                                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>{g.member_count} member{g.member_count !== 1 ? 's' : ''}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <AttendanceRing percentage={g.avg_pct || 0} size={44} />
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Attendance</div>
+                                        <AttBar pct={g.avg_pct} />
+                                    </div>
                                 </div>
                             </div>
-                            <AttBadge pct={g.avg_pct} />
-                        </div>
-                    ))}
-                </div>
-            )}
+                        ))}
+                    </div>
+                )}
+            </div>
         </div>
     )
 }

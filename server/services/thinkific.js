@@ -140,10 +140,10 @@ async function fetchAllPages(endpoint, params = {}) {
                         } catch (err) {
                             const is429 = err.response?.status === 429
                             const retryAfter = err.response?.headers['retry-after']
-                            // Wait exponentially: 10s, 20s, 40s... or use Retry-After header
-                            let wait = is429 ? (retryAfter ? parseInt(retryAfter) * 1000 : 10000 * Math.pow(2, attempt - 1)) : 2000 * attempt
-                            // Cap at 1 minute
-                            wait = Math.min(wait, 60000)
+                            // Wait exponentially: 15s, 30s, 60s... or use Retry-After header
+                            let wait = is429 ? (retryAfter ? parseInt(retryAfter) * 1000 : 15000 * Math.pow(2, attempt - 1)) : 2000 * attempt
+                            // Cap at 2 minutes
+                            wait = Math.min(wait, 120000)
 
                             if (attempt < 7) {
                                 console.warn(`   ⚠️ ${endpoint} p${page} try ${attempt}/7 (${is429 ? 'rate-limited' : 'error'}, wait ${Math.round(wait / 1000)}s)`)
@@ -158,9 +158,9 @@ async function fetchAllPages(endpoint, params = {}) {
                 const results = await Promise.all(promises)
                 results.forEach(items => { if (items) allItems.push(...items) })
 
-                // 2s delay between individual requests to stay under burst limits
+                // 4s delay between individual requests to stay under burst limits
                 if (b + BATCH_SIZE < pages.length) {
-                    await new Promise(r => setTimeout(r, 2000))
+                    await new Promise(r => setTimeout(r, 4000))
                 }
             }
         }

@@ -74,9 +74,9 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
-            GROUP BY week
-            HAVING week != '0000-00'
-            ORDER BY week DESC
+            AND ${weekSelector} != '0000-00'
+            GROUP BY 1
+            ORDER BY 1 DESC
             LIMIT 13
         `, celebrationPoint ? [celebrationPoint] : [])
 
@@ -92,7 +92,7 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             FROM formation_groups fg
             LEFT JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
             WHERE fg.active = 1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
-            GROUP BY fg.id
+            GROUP BY fg.id, fg.name, fg.group_code
             ORDER BY sessions DESC
             LIMIT 5
         `, celebrationPoint ? [celebrationPoint] : [])

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
+import AttendanceRing from './AttendanceRing.jsx'
+import AttendanceModal from './AttendanceModal.jsx'
 
 // Initials avatar — colour derived from name hash, matches existing portal style
 function InitialsAvatar({ name, size = 36 }) {
@@ -49,15 +51,6 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
     // The session being edited (null = creating new)
     const [editingSession, setEditingSession] = useState(null)
 
-    // Check-in form state
-    const today = new Date().toISOString().slice(0, 10)
-    const [checkInDate, setCheckInDate]     = useState(today)
-    const [checkInWeek, setCheckInWeek]     = useState(1)
-    const [didNotMeet, setDidNotMeet]       = useState(false)
-    const [sessionNotes, setSessionNotes]   = useState('')
-    const [attendanceLog, setAttendanceLog] = useState({})
-    // attendanceLog[memberId] = { attended: bool, note: string, noteOpen: bool }
-
     const showToast = (msg, type = 'success') => {
         setToast({ msg, type })
         setTimeout(() => setToast(null), 3000)
@@ -87,138 +80,14 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
 
     // Open modal for NEW session
     const openNewSession = () => {
-        setEditingSession(null)
-        setCheckInDate(today)
-        setCheckInWeek(1)
-        setDidNotMeet(false)
-        setSessionNotes('')
+        setEditingSession({ id: null })
         setShowModal(true)
     }
 
     // Open modal for EDITING an existing session
     const openEditSession = async (session) => {
         setEditingSession(session)
-        setCheckInDate(session.session_date || today)
-        setCheckInWeek(session.week_number || 1)
-        setDidNotMeet(!!session.did_not_meet)
-        setSessionNotes(session.notes || '')
-
-        // Load existing attendance for this session
-        try {
-            const res = await fetch(`/api/attendance/sessions/${session.id}`)
-            const data = await res.json()
-            if (data.success && data.attendance) {
-                const log = {}
-                members.forEach(m => {
-                    const record = data.attendance.find(a => a.group_member_id === m.id)
-                    log[m.id] = {
-                        attended: record ? !!record.attended : false,
-                        note: record?.note || '',
-                        noteOpen: !!(record?.note),
-                    }
-                })
-                setAttendanceLog(log)
-            }
-        } catch (e) {
-            console.error('Failed to load session attendance:', e)
-            // Fallback: blank log
-            const log = {}
-            members.forEach(m => { log[m.id] = { attended: false, note: '', noteOpen: false } })
-            setAttendanceLog(log)
-        }
-
         setShowModal(true)
-    }
-
-    // Re-initialise attendanceLog when modal opens for NEW session
-    useEffect(() => {
-        if (!showModal || editingSession) return
-        const log = {}
-        members.forEach(m => {
-            log[m.id] = { attended: false, note: '', noteOpen: false }
-        })
-        setAttendanceLog(log)
-    }, [showModal, members, editingSession])
-
-    const toggleAttended = (id) => {
-        setAttendanceLog(prev => ({
-            ...prev,
-            [id]: { ...prev[id], attended: !prev[id].attended }
-        }))
-    }
-
-    const setNote = (id, val) => {
-        setAttendanceLog(prev => ({ ...prev, [id]: { ...prev[id], note: val } }))
-    }
-
-    const toggleNoteOpen = (id) => {
-        setAttendanceLog(prev => ({ ...prev, [id]: { ...prev[id], noteOpen: !prev[id].noteOpen } }))
-    }
-
-    const attendedCount = Object.values(attendanceLog).filter(v => v.attended).length
-
-    const handleSave = async () => {
-        setSaving(true)
-        try {
-            let sessionId
-
-            if (editingSession) {
-                // UPDATE existing session
-                const uRes = await fetch(`/api/attendance/sessions/${editingSession.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_date: checkInDate,
-                        week_number: checkInWeek,
-                        did_not_meet: didNotMeet,
-                        notes: sessionNotes || null,
-                    })
-                })
-                const uData = await uRes.json()
-                if (!uData.success) throw new Error(uData.message)
-                sessionId = editingSession.id
-            } else {
-                // CREATE new session
-                const sRes = await fetch(`/api/attendance/group/${groupId}/sessions`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_date: checkInDate,
-                        week_number: checkInWeek,
-                        did_not_meet: didNotMeet,
-                        notes: sessionNotes || null,
-                    })
-                })
-                const sData = await sRes.json()
-                if (!sData.success) throw new Error(sData.message)
-                sessionId = sData.sessionId
-            }
-
-            // Submit attendance (skip if group did not meet)
-            if (!didNotMeet) {
-                const payload = members.map(m => ({
-                    group_member_id: m.id,
-                    attended: !!(attendanceLog[m.id]?.attended),
-                    note: attendanceLog[m.id]?.note || null,
-                }))
-                const cRes = await fetch(`/api/attendance/sessions/${sessionId}/checkin`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ attendance: payload })
-                })
-                const cData = await cRes.json()
-                if (!cData.success) throw new Error(cData.message)
-            }
-
-            setShowModal(false)
-            setEditingSession(null)
-            await fetchData()
-            showToast(editingSession ? 'Session updated' : 'Session saved')
-        } catch (e) {
-            showToast(e.message || 'Failed to save session', 'error')
-        } finally {
-            setSaving(false)
-        }
     }
 
     const handleDelete = async (sessionId) => {
@@ -330,10 +199,10 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                             const pct = sum?.percentage ?? 0
                             return (
                                 <div key={m.id} style={rowStyle}>
-                                    <InitialsAvatar name={m.student_name} />
+                                    <InitialsAvatar name={m.student_name || m.name || 'U'} />
                                     <div style={{ flex: 1, minWidth: 0 }}>
                                         <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                            {m.student_name}
+                                            {m.student_name || m.name || m.email || `Student ${m.id}`}
                                         </div>
                                         {sum && sum.totalSessions > 0 && (
                                             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -342,7 +211,7 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                             </div>
                                         )}
                                     </div>
-                                    {sum && sum.totalSessions > 0 && <PctBadge pct={pct} />}
+                                    {sum && sum.totalSessions > 0 && <AttendanceRing percentage={pct} size={36} />}
                                 </div>
                             )
                         })}
@@ -425,191 +294,13 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
 
             {/* ── Check-in Modal (Create + Edit) ── */}
             {showModal && (
-                <div
-                    style={{
-                        position: 'fixed', inset: 0, zIndex: 10000,
-                        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)',
-                        display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-                    }}
-                    onClick={() => { setShowModal(false); setEditingSession(null) }}
-                >
-                    <div
-                        style={{
-                            width: '100%', maxWidth: 480,
-                            background: 'var(--glass-layer-2, rgba(30,30,40,0.96))',
-                            backdropFilter: 'blur(24px)',
-                            border: '1px solid var(--glass-border)',
-                            borderRadius: '20px 20px 0 0',
-                            padding: '20px 20px 32px',
-                            maxHeight: '90vh', display: 'flex', flexDirection: 'column',
-                        }}
-                        onClick={e => e.stopPropagation()}
-                    >
-                        {/* Modal header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                            <div>
-                                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
-                                    {editingSession ? 'Edit Session' : 'Record Session'}
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{groupName}</div>
-                            </div>
-                            <button onClick={() => { setShowModal(false); setEditingSession(null) }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>✕</button>
-                        </div>
-
-                        {/* Date + Week */}
-                        <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                            <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Date</label>
-                                <input
-                                    type="date" value={checkInDate}
-                                    onChange={e => setCheckInDate(e.target.value)}
-                                    style={inputStyle}
-                                />
-                            </div>
-                            <div style={{ width: 90 }}>
-                                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Week</label>
-                                <select
-                                    value={checkInWeek}
-                                    onChange={e => setCheckInWeek(Number(e.target.value))}
-                                    style={inputStyle}
-                                >
-                                    {Array.from({ length: 13 }, (_, i) => i + 1).map(w => (
-                                        <option key={w} value={w}>Week {w}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        {/* Session notes */}
-                        <div style={{ marginBottom: 14 }}>
-                            <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Session Notes (optional)</label>
-                            <textarea
-                                value={sessionNotes}
-                                onChange={e => setSessionNotes(e.target.value)}
-                                placeholder="How did the session go?"
-                                rows={2}
-                                style={{
-                                    ...inputStyle,
-                                    resize: 'vertical',
-                                    minHeight: 48,
-                                }}
-                            />
-                        </div>
-
-                        {/* Did not meet toggle */}
-                        <label style={{
-                            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
-                            padding: '10px 12px', borderRadius: 8,
-                            background: didNotMeet ? 'rgba(253,203,110,0.1)' : 'rgba(255,255,255,0.04)',
-                            border: `1px solid ${didNotMeet ? 'rgba(253,203,110,0.3)' : 'var(--glass-border)'}`,
-                            cursor: 'pointer',
-                        }}>
-                            <input
-                                type="checkbox" checked={didNotMeet}
-                                onChange={e => setDidNotMeet(e.target.checked)}
-                                style={{ width: 16, height: 16, accentColor: '#fdcb6e', cursor: 'pointer' }}
-                            />
-                            <span style={{ fontSize: 13, color: didNotMeet ? '#fdcb6e' : 'var(--text-secondary)', fontWeight: didNotMeet ? 600 : 400 }}>
-                                Group did not meet this week
-                            </span>
-                        </label>
-
-                        {/* Member checklist */}
-                        {!didNotMeet && (
-                            <>
-                                <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>
-                                    {members.map(m => {
-                                        const log = attendanceLog[m.id] || { attended: false, note: '', noteOpen: false }
-                                        return (
-                                            <div key={m.id} style={{ marginBottom: 4 }}>
-                                                {/* Member row — 44px min height for mobile touch targets */}
-                                                <div
-                                                    style={{
-                                                        display: 'flex', alignItems: 'center', gap: 10,
-                                                        minHeight: 44, padding: '6px 8px', borderRadius: 8,
-                                                        background: log.attended ? 'rgba(74,158,255,0.08)' : 'transparent',
-                                                        cursor: 'pointer',
-                                                    }}
-                                                    onClick={() => toggleAttended(m.id)}
-                                                >
-                                                    {/* Custom checkbox */}
-                                                    <div style={{
-                                                        width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
-                                                        border: log.attended ? 'none' : '2px solid rgba(255,255,255,0.3)',
-                                                        background: log.attended ? '#4A9EFF' : 'transparent',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        transition: 'all 0.15s',
-                                                    }}>
-                                                        {log.attended && (
-                                                            <svg width="13" height="10" viewBox="0 0 13 10" fill="none">
-                                                                <path d="M1 5l3.5 3.5L12 1" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                                                            </svg>
-                                                        )}
-                                                    </div>
-
-                                                    <InitialsAvatar name={m.student_name} size={30} />
-
-                                                    <span style={{ flex: 1, fontSize: 14, color: 'var(--text-primary)', fontWeight: log.attended ? 600 : 400 }}>
-                                                        {m.student_name}
-                                                    </span>
-
-                                                    {/* Note button */}
-                                                    <button
-                                                        onClick={e => { e.stopPropagation(); toggleNoteOpen(m.id) }}
-                                                        style={{
-                                                            background: 'none', border: 'none', cursor: 'pointer',
-                                                            fontSize: 11, color: log.noteOpen || log.note ? '#4A9EFF' : 'var(--text-secondary)',
-                                                            padding: '4px 6px', borderRadius: 4,
-                                                        }}
-                                                    >
-                                                        {log.note ? '📝' : 'Note'}
-                                                    </button>
-                                                </div>
-
-                                                {/* Inline note input */}
-                                                {log.noteOpen && (
-                                                    <input
-                                                        autoFocus
-                                                        placeholder="Add a note…"
-                                                        value={log.note}
-                                                        onChange={e => setNote(m.id, e.target.value)}
-                                                        onClick={e => e.stopPropagation()}
-                                                        style={{
-                                                            width: '100%', margin: '2px 0 4px', padding: '7px 12px',
-                                                            borderRadius: 6, fontSize: 12,
-                                                            background: 'rgba(255,255,255,0.07)',
-                                                            border: '1px solid rgba(74,158,255,0.4)',
-                                                            color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box',
-                                                        }}
-                                                    />
-                                                )}
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-
-                                {/* Live counter */}
-                                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, textAlign: 'center' }}>
-                                    Attended: <strong style={{ color: 'var(--text-primary)' }}>{attendedCount}</strong> / {members.length}
-                                </div>
-                            </>
-                        )}
-
-                        {/* Save button */}
-                        <button
-                            disabled={saving}
-                            onClick={handleSave}
-                            style={{
-                                width: '100%', padding: '13px', borderRadius: 10, border: 'none',
-                                background: saving ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                                color: saving ? 'var(--text-secondary)' : '#fff',
-                                fontWeight: 700, fontSize: 15, cursor: saving ? 'not-allowed' : 'pointer',
-                            }}
-                        >
-                            {saving ? 'Saving…' : editingSession ? 'Update Session' : 'Save Session'}
-                        </button>
-                    </div>
-                </div>
+                <AttendanceModal
+                    groupId={groupId}
+                    sessionId={editingSession?.id}
+                    groupName={groupName}
+                    onClose={() => { setShowModal(false); setEditingSession(null); }}
+                    onSave={() => { fetchData(); showToast(editingSession?.id ? 'Session updated' : 'Session saved'); }}
+                />
             )}
         </div>
     )

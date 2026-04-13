@@ -1,6 +1,6 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
-import { requireAuth, requireAdmin, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole, userHasRole } from '../middleware/rbac.js'
+import { requireAuth, requireAdmin, requireAdminOrTechSupport, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole, userHasRole } from '../middleware/rbac.js'
 import { getGroupNotes, addGroupNote } from '../services/notes.js'
 import { invalidatePattern } from '../services/cache.js'
 import { getStudentById } from '../services/thinkific.js'

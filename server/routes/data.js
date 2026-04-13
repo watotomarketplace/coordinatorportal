@@ -59,18 +59,20 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         let topGroups = []
         let reportingStats = { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
 
+        const floatCast = IS_POSTGRES ? "DECIMAL" : "FLOAT"
+
         // Fetch attendance trend (last 13 weeks)
         const attendanceTrend = await dbAll(`
-            SELECT gs.week_number as week, 
+            SELECT gs.week_number, 
                    COUNT(*) as session_count,
-                   AVG(CAST((SELECT COUNT(*) FROM session_attendance WHERE session_id = gs.id AND attended = 1) AS ${floatCast}) / 
-                       NULLIF((SELECT COUNT(*) FROM group_members WHERE formation_group_id = gs.formation_group_id AND active = 1), 0)) * 100 as avg_att
+                   AVG(CAST((SELECT COUNT(*) FROM session_attendance sa WHERE sa.session_id = gs.id AND sa.attended = 1) AS ${floatCast}) / 
+                       NULLIF((SELECT COUNT(gm.id) FROM group_members gm WHERE gm.formation_group_id = gs.formation_group_id AND gm.active = 1), 0)) * 100 as avg_att
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             AND gs.week_number BETWEEN 1 AND 13
-            GROUP BY 1
-            ORDER BY 1 ASC
+            GROUP BY gs.week_number
+            ORDER BY gs.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
         // Ensure 13 data points (weeks 1-13)
@@ -80,8 +82,8 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         }))
 
         attendanceTrend.forEach(t => {
-            if (t.week >= 1 && t.week <= 13) {
-                attendanceByWeek[t.week - 1].value = Math.round(t.avg_att || 0)
+            if (t.week_number >= 1 && t.week_number <= 13) {
+                attendanceByWeek[t.week_number - 1].value = Math.round(t.avg_att || 0)
             }
         })
 
@@ -115,14 +117,14 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
 
         // Engagement/Pastoral trend over weeks (1-13)
         const reportTrend = await dbAll(`
-            SELECT week_number, 
+            SELECT wr.week_number, 
                    COUNT(*) as count,
-                   SUM(CASE WHEN pastoral_concerns IS NOT NULL AND pastoral_concerns != '' AND pastoral_concerns != '0' AND pastoral_concerns != 'false' THEN 1 ELSE 0 END) as concerns
+                   SUM(CASE WHEN wr.pastoral_concerns IS NOT NULL AND wr.pastoral_concerns != '' AND wr.pastoral_concerns != '0' AND wr.pastoral_concerns != 'false' THEN 1 ELSE 0 END) as concerns
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
             WHERE wr.week_number BETWEEN 1 AND 13 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
-            GROUP BY week_number
-            ORDER BY week_number ASC
+            GROUP BY wr.week_number
+            ORDER BY wr.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
         // Ensure 13 data points for reporting trends

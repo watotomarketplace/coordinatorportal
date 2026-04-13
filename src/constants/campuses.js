@@ -1,0 +1,21 @@
+export const CELEBRATION_POINTS = [
+  'Bbira',
+  'Bugolobi',
+  'Bweyogerere',
+  'Downtown',
+  'Entebbe',
+  'Gulu',
+  'Jinja',
+  'Juba',
+  'Kansanga',
+  'Kyengera',
+  'Laminadera',
+  'Lubowa',
+  'Mbarara',
+  'Mukono',
+  'Nakwero',
+  'Nansana',
+  'Ntinda',
+  'Online',
+  'Suubi'
+];

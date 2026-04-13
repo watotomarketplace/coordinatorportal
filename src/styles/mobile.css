@@ -1,0 +1,201 @@
+/* src/styles/mobile.css */
+@import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&display=swap');
+
+/* Base Mobile Overrides */
+.mobile {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overscroll-behavior-y: none; /* Prevent browser bounce */
+}
+
+.mobile-layout {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  /* Safe areas for iOS notch / pill */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Lock Screen */
+.ios-lock-screen {
+  position: fixed;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  padding-top: max(80px, env(safe-area-inset-top));
+}
+
+.ios-clock-large {
+  font-size: 76px;
+  font-weight: 200;
+  text-align: center;
+  color: white;
+  line-height: 1;
+  text-shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+
+.ios-date-large {
+  font-size: 20px;
+  font-weight: 500;
+  text-align: center;
+  color: rgba(255,255,255,0.9);
+  margin-top: 8px;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+.lock-screen-form {
+  margin-top: auto;
+  margin-bottom: max(60px, env(safe-area-inset-bottom));
+  padding: 24px;
+}
+
+/* Home Screen Grid */
+.ios-home-screen {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
+  z-index: 40;
+  padding-top: max(60px, env(safe-area-inset-top));
+  display: flex;
+  flex-direction: column;
+}
+
+[data-theme="light"] .ios-home-screen {
+  background: rgba(255,255,255,0.5);
+}
+
+.ios-app-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px 16px;
+  padding: 32px 24px;
+  margin-top: 40px;
+}
+
+.ios-app-icon-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.ios-app-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+}
+
+.ios-app-icon:active {
+  transform: scale(0.85); /* iOS tap squash */
+}
+
+.ios-app-label {
+  font-size: 11px;
+  color: white;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  font-weight: 500;
+}
+
+[data-theme="light"] .ios-app-label {
+  color: #1c1c1e;
+  text-shadow: none;
+}
+
+/* Tab Bar */
+.ios-tab-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(84px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgba(28,28,30,0.7);
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  z-index: 30;
+}
+
+[data-theme="light"] .ios-tab-bar {
+  background: rgba(250,250,250,0.7);
+  border-top: 1px solid rgba(0,0,0,0.1);
+}
+
+.ios-tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: rgba(255,255,255,0.5);
+  padding: 8px 0;
+  flex: 1;
+}
+
+[data-theme="light"] .ios-tab-item {
+  color: rgba(0,0,0,0.4);
+}
+
+.ios-tab-item.active {
+  color: #0A84FF;
+}
+
+/* Control Center */
+.control-center-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(50px) saturate(200%);
+  -webkit-backdrop-filter: blur(50px) saturate(200%);
+  padding: max(60px, env(safe-area-inset-top)) 24px 24px;
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+
+.control-center-tile {
+  background: rgba(255,255,255,0.15);
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.control-center-tile.active {
+  background: white;
+  color: black;
+}
+
+/* Page Containers */
+.mobile-page-content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: max(60px, env(safe-area-inset-top)) 24px calc(140px + env(safe-area-inset-bottom));
+}
+
+.mobile-page-header {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 24px;
+}

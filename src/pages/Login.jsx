@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
-import { Target, User, ArrowRight, Plus } from 'lucide-react'
+import { User, ArrowRight, Plus } from 'lucide-react'
 
 export default function Login() {
   const [lastUser, setLastUser] = useState(null)
@@ -16,31 +16,19 @@ export default function Login() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // 1. Clock
     const timer = setInterval(() => setTime(new Date()), 1000)
-
-    // 2. Load last user
     try {
       const stored = localStorage.getItem('wl101_last_user')
       if (stored) {
-        const u = JSON.parse(stored)
-        setLastUser(u)
+        setLastUser(JSON.parse(stored))
         setIsOtherUser(false)
-      } else {
-        setIsOtherUser(true)
       }
-    } catch (e) {
-      console.error('Failed to load last user:', e)
-      setIsOtherUser(true)
-    }
-
+    } catch (e) { console.error(e) }
     return () => clearInterval(timer)
   }, [])
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault()
-    
-    // Target user
     const targetUsername = isOtherUser ? username : lastUser?.username
     if (!targetUsername?.trim() || !password) return
     
@@ -49,7 +37,6 @@ export default function Login() {
     setSubmitting(false)
     
     if (ok) {
-      // 3. Persist this user for next time
       const user = useAuthStore.getState().user
       if (user) {
         localStorage.setItem('wl101_last_user', JSON.stringify({
@@ -65,164 +52,102 @@ export default function Login() {
   const timeString = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   const dateString = time.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
 
-  const glassPill = {
-    background: 'rgba(255, 255, 255, 0.08)',
-    backdropFilter: 'blur(20px)',
-    border: '1px solid rgba(255, 255, 255, 0.12)',
-    borderRadius: 20,
-    padding: '8px 12px',
-    color: 'white',
-    fontSize: 13,
-    transition: 'all 0.2s',
-  }
-
   return (
     <div style={{
-      height: '100vh', width: '100vw',
-      display: 'flex', flexDirection: 'column',
-      background: '#151520',
-      backgroundImage: 'url(/bg.jpeg)',
-      backgroundSize: 'cover', backgroundPosition: 'center',
+      height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column',
+      background: '#151520', backgroundImage: 'url(/bg.jpeg)', backgroundSize: 'cover', backgroundPosition: 'center',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      position: 'relative', overflow: 'hidden',
-      color: 'white'
+      position: 'relative', overflow: 'hidden', color: 'white'
     }}>
-      {/* Top Section removed as requested */}
-
-      {/* Main Content Area */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '10vh' }}>
-        
-        {/* Clock Section */}
         <div style={{ textAlign: 'center', marginBottom: '8vh' }}>
-          <div style={{ fontSize: '5rem', fontWeight: 500, letterSpacing: '-1px' }}>{timeString}</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 500, opacity: 0.9 }}>{dateString}</div>
+          <div style={{ fontSize: '5.5rem', fontWeight: 500, letterSpacing: '-2px', textShadow: '0 4px 30px rgba(0,0,0,0.3)' }}>{timeString}</div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 500, opacity: 0.9, textShadow: '0 2px 10px rgba(0,0,0,0.3)' }}>{dateString}</div>
         </div>
 
-        {/* User Card */}
         <div style={{ textAlign: 'center', width: 320 }}>
           <div style={{
-            width: 128, height: 128, borderRadius: '50%',
-            background: 'rgba(255,255,255,0.08)',
+            width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)',
             margin: '0 auto 24px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
-            border: '1.5px solid rgba(255,255,255,0.2)',
-            overflow: 'hidden',
-            position: 'relative',
-            backdropFilter: 'blur(20px)'
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)', border: '1.5px solid rgba(255,255,255,0.25)',
+            overflow: 'hidden', backdropFilter: 'blur(30px)'
           }}>
             {(!isOtherUser && lastUser?.profile_image) ? (
-              <img src={lastUser.profile_image} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="User Avatar" />
+              <img src={lastUser.profile_image} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Avatar" />
             ) : (
-              <div style={{ 
-                width: '100%', height: '100%', 
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05))'
-              }}>
-                <User size={64} color="rgba(255,255,255,0.4)" strokeWidth={1} />
-              </div>
+              <User size={72} color="rgba(255,255,255,0.5)" strokeWidth={1} />
             )}
           </div>
 
-          <h2 style={{ fontSize: 28, fontWeight: 600, marginBottom: 32, letterSpacing: '-0.5px' }}>
-            {isOtherUser ? 'Other User' : (lastUser?.name || 'User')}
+          <h2 style={{ fontSize: 32, fontWeight: 600, marginBottom: 32, letterSpacing: '-0.5px', textShadow: '0 2px 10px rgba(0,0,0,0.3)' }}>
+            {isOtherUser ? 'Other User' : lastUser?.name}
           </h2>
 
           <form onSubmit={handleSubmit} style={{ width: 280, margin: '0 auto' }}>
             {isOtherUser && (
-              <div style={{ marginBottom: 14 }}>
-                <input
-                  type="text"
-                  placeholder="Username"
-                  autoFocus
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  style={{
-                    width: '100%', height: 40, borderRadius: 20,
-                    background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.1)',
-                    padding: '0 20px', color: 'white', fontSize: 14, outline: 'none',
-                    textAlign: 'center'
-                  }}
-                />
-              </div>
+              <input
+                type="text" placeholder="Username" autoFocus
+                value={username} onChange={e => setUsername(e.target.value)}
+                style={{
+                  width: '100%', height: 44, borderRadius: 22, background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid rgba(255,255,255,0.15)', padding: '0 20px', color: 'white',
+                  fontSize: 15, outline: 'none', textAlign: 'center', marginBottom: 16
+                }}
+              />
             )}
 
             <div style={{ position: 'relative', marginBottom: 14 }}>
               <input
-                type="password"
-                placeholder="Enter Password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                autoFocus={!isOtherUser}
+                type="password" placeholder="Enter Password" value={password}
+                onChange={e => setPassword(e.target.value)} autoFocus={!isOtherUser}
                 style={{
-                  width: '100%', height: 40, borderRadius: 20,
-                  background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.1)',
-                  padding: '0 48px 0 20px', color: 'white', fontSize: 14, outline: 'none',
-                  textAlign: 'center'
+                  width: '100%', height: 44, borderRadius: 22, background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid rgba(255,255,255,0.15)', padding: '0 50px 0 20px',
+                  color: 'white', fontSize: 15, outline: 'none', textAlign: 'center'
                 }}
               />
               <button
-                type="submit"
-                disabled={submitting}
+                type="submit" disabled={submitting}
                 style={{
-                  position: 'absolute', right: 5, top: 5, width: 30, height: 30,
-                  borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: 'none',
+                  position: 'absolute', right: 7, top: 7, width: 30, height: 30,
+                  borderRadius: '50%', background: 'rgba(255,255,255,0.2)', border: 'none',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: 'white', transition: 'all 0.2s',
-                  backdropFilter: 'blur(5px)'
+                  cursor: 'pointer', color: 'white'
                 }}
               >
-                <ArrowRight size={16} strokeWidth={2.5} />
+                <ArrowRight size={18} strokeWidth={2.5} />
               </button>
-            </div>
-
-            <div style={{ fontSize: 13, opacity: 0.5, marginBottom: 40, fontWeight: 400 }}>
-              Enter Password
             </div>
 
             <button
               type="button"
-              onClick={() => {
-                setIsOtherUser(!isOtherUser)
-                setPassword('')
-              }}
+              onClick={() => { setIsOtherUser(!isOtherUser); setPassword('') }}
               style={{
-                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', 
-                padding: '10px 24px', borderRadius: 20, fontSize: 13, 
-                fontWeight: 600, color: 'rgba(255,255,255,0.85)', cursor: 'pointer',
-                backdropFilter: 'blur(20px)',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+                background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', 
+                padding: '10px 24px', borderRadius: 22, fontSize: 14, marginTop: 40,
+                fontWeight: 600, color: 'white', cursor: 'pointer', backdropFilter: 'blur(20px)'
               }}
             >
               {isOtherUser ? 'Back' : 'Switch User'}
             </button>
           </form>
-
-          {error && (
-            <div style={{ marginTop: 12, color: '#ffb3b3', fontSize: 12 }}>{error}</div>
-          )}
+          {error && <div style={{ marginTop: 16, color: '#ffb3b3', fontSize: 13 }}>{error}</div>}
         </div>
       </div>
 
-      {/* Bottom Right Floating Button */}
-      <div style={{ position: 'absolute', bottom: 24, right: 24 }}>
+      <div style={{ position: 'absolute', bottom: 30, right: 30 }}>
         <div style={{
-          width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,0,0,0.3)',
-          backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.2)',
+          width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.1)',
+          backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.2)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
         }}>
-          <Plus size={20} />
+          <Plus size={24} />
         </div>
       </div>
 
-      {/* Footer */}
-      <div style={{
-        position: 'absolute', bottom: 20, width: '100%', textAlign: 'center',
-        fontSize: 10, opacity: 0.4, letterSpacing: '0.5px'
-      }}>
+      <div style={{ position: 'absolute', bottom: 20, width: '100%', textAlign: 'center', fontSize: 11, opacity: 0.5 }}>
         Watoto Church © 2026
       </div>
     </div>
   )
 }
-
-

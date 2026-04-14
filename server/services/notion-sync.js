@@ -144,6 +144,10 @@ export const CODE_ALIASES = {
     'WN3G2': 'WNW13',  // Irene Plan self-corrected to WNW13 next week
     // ── Gulu: Group 6 ─────────────────────────────────────────
     'GROUP 6': 'WGU06',
+    // ── Mbarara: WMB ─────────────────────────────────────────
+    'WMC': 'WMB', 'WMBA': 'WMB', 'WMMB': 'WMB',
+    // ── Laminadera: WLM ──────────────────────────────────────
+    'WLC': 'WLM', 'WLMI': 'WLM', 'WLLM': 'WLM',
 }
 
 // --- Normalize group codes for fuzzy matching ---

@@ -1,23 +1,12 @@
 import express from 'express'
 import { getStudentData, getChartData, getStats, forceRefresh, getPaginatedUsers, getStudentById, getStudentProgress } from '../services/thinkific.js'
-import { getNotes, addNote, getGroupNotes, addGroupNote } from '../services/notes.js'
-import { getStudentTags, getAllTags, addTag, removeTag, removeTagByName, TAG_COLORS } from '../services/tags.js'
-import { logAudit } from '../services/audit.js'
-import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
+import { getNotes, addNote } from '../services/notes.js'
+import { getStudentTags } from '../services/tags.js'
+import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
 import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
-
-// Map role to note_type for the comments system (PRD v2 Section 5.5)
-const ROLE_NOTE_TYPE_MAP = {
-    Admin: 'coordinator',        // Admin inherits all capabilities
-    LeadershipTeam: 'coordinator',
-    Pastor: 'pastoral',
-    Coordinator: 'coordinator',
-    Facilitator: 'facilitator_observation',
-    TechSupport: 'tech_note'
-}
 
 // Get dashboard stats (Total Enrolled, Active, etc.)
 router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
@@ -26,35 +15,24 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         const celebrationPoint = req.scopedCelebrationPoint
 
         const result = await getStudentData(celebrationPoint)
-        
         let students = result.students || []
 
         // Facilitators: filter to only students in their assigned groups
         if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
             const members = await dbAll(`
-                SELECT fgm.student_id, fgm.student_name, fgm.student_email
+                SELECT fgm.student_id
                 FROM formation_group_members fgm
                 JOIN formation_groups fg ON fgm.formation_group_id = fg.id
                 WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
             `, [user.id, user.id])
 
             const memberIds = new Set(members.map(m => String(m.student_id)))
-            const memberEmails = new Set(members.filter(m => m.student_email).map(m => m.student_email.toLowerCase()))
-
-            students = students.filter(s => {
-                if (s.id && memberIds.has(String(s.id))) return true
-                if (s.userId && memberIds.has(String(s.userId))) return true
-                if (s.email && memberEmails.has(s.email.toLowerCase())) return true
-                return false
-            })
+            students = students.filter(s => memberIds.has(String(s.id || s.userId)))
         }
 
         const stats = getStats(students)
         const chartData = getChartData(students)
 
-        // ═══════════════════════════════════════════════════════
-        // ADD ATTENDANCE & REPORTING OVERLAYS (Part 2)
-        // ═══════════════════════════════════════════════════════
         let attendanceStats = { avgAttendance: 0, totalSessions: 0, trend: [] }
         let topGroups = []
         let reportingStats = { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
@@ -62,11 +40,12 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         const floatCast = IS_POSTGRES ? "DECIMAL" : "FLOAT"
 
         // Fetch attendance trend (last 13 weeks)
+        // Explicitly using week_number and avoiding any implicit "week" references
         const attendanceTrend = await dbAll(`
             SELECT gs.week_number, 
-                   COUNT(*) as session_count,
+                   COUNT(gs.id) as session_count,
                    AVG(CAST((SELECT COUNT(*) FROM session_attendance sa WHERE sa.session_id = gs.id AND sa.attended = 1) AS ${floatCast}) / 
-                       NULLIF((SELECT COUNT(gm.id) FROM group_members gm WHERE gm.formation_group_id = gs.formation_group_id AND gm.active = 1), 0)) * 100 as avg_att
+                       NULLIF((SELECT COUNT(*) FROM formation_group_members fgm WHERE fgm.formation_group_id = gs.formation_group_id), 0)) * 100 as avg_att
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
@@ -75,15 +54,15 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             ORDER BY gs.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        // Ensure 13 data points (weeks 1-13)
         const attendanceByWeek = Array.from({ length: 13 }, (_, i) => ({
             label: `Week ${i + 1}`,
             value: 0
         }))
 
         attendanceTrend.forEach(t => {
-            if (t.week_number >= 1 && t.week_number <= 13) {
-                attendanceByWeek[t.week_number - 1].value = Math.round(t.avg_att || 0)
+            const wk = parseInt(t.week_number, 10)
+            if (wk >= 1 && wk <= 13) {
+                attendanceByWeek[wk - 1].value = Math.round(t.avg_att || 0)
             }
         })
 
@@ -93,8 +72,8 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         topGroups = await dbAll(`
             SELECT fg.name, fg.group_code, COUNT(gs.id) as sessions
             FROM formation_groups fg
-            JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
-            WHERE fg.active = 1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            JOIN group_sessions gs ON gs.formation_group_id = fg.id
+            WHERE fg.active = 1 AND gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             GROUP BY fg.id, fg.name, fg.group_code
             ORDER BY sessions DESC
             LIMIT 5
@@ -102,24 +81,24 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
 
         // Fetch Reporting Stats from Notion cache
         const reports = await dbAll(`
-            SELECT wr.*, fg.celebration_point
+            SELECT wr.id, wr.week_number, wr.pastoral_concerns, fg.celebration_point
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
             WHERE 1=1 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
         `, celebrationPoint ? [celebrationPoint] : [])
 
         const totalGroupsResult = await dbGet(`SELECT COUNT(*) as count FROM formation_groups WHERE active = 1 ${celebrationPoint ? 'AND celebration_point = ?' : ''}`, celebrationPoint ? [celebrationPoint] : [])
-        const totalGroups = totalGroupsResult?.count || 1
+        const totalGroupsCount = totalGroupsResult?.count || 1
         
         reportingStats.totalReports = reports.length
-        reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns && r.pastoral_concerns.length > 0 && r.pastoral_concerns !== '0' && r.pastoral_concerns !== 'false').length
-        reportingStats.compliance = Math.round((reports.length / (totalGroups * 13)) * 100) // Rough estimation across 13 weeks
+        reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns && r.pastoral_concerns.length > 2).length
+        reportingStats.compliance = Math.round((reports.length / (totalGroupsCount * 13)) * 100)
 
         // Engagement/Pastoral trend over weeks (1-13)
         const reportTrend = await dbAll(`
             SELECT wr.week_number, 
-                   COUNT(*) as count,
-                   SUM(CASE WHEN wr.pastoral_concerns IS NOT NULL AND wr.pastoral_concerns != '' AND wr.pastoral_concerns != '0' AND wr.pastoral_concerns != 'false' THEN 1 ELSE 0 END) as concerns
+                   COUNT(wr.id) as report_count,
+                   SUM(CASE WHEN wr.pastoral_concerns IS NOT NULL AND LENGTH(wr.pastoral_concerns) > 2 THEN 1 ELSE 0 END) as concerns_count
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
             WHERE wr.week_number BETWEEN 1 AND 13 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
@@ -127,7 +106,6 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             ORDER BY wr.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        // Ensure 13 data points for reporting trends
         const trendsByWeek = Array.from({ length: 13 }, (_, i) => ({
             week: i + 1,
             reports: 0,
@@ -135,9 +113,10 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         }))
 
         reportTrend.forEach(t => {
-            if (t.week_number >= 1 && t.week_number <= 13) {
-                trendsByWeek[t.week_number - 1].reports = t.count
-                trendsByWeek[t.week_number - 1].concerns = t.concerns
+            const wk = parseInt(t.week_number, 10)
+            if (wk >= 1 && wk <= 13) {
+                trendsByWeek[wk - 1].reports = t.report_count
+                trendsByWeek[wk - 1].concerns = t.concerns_count
             }
         })
 
@@ -151,20 +130,16 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             completedStudents: stats.healthyStudents, 
             avgProgress: stats.averageProgress,
             inactiveCount: stats.totalStudents - stats.activeStudents,
-            
-            // Chart Data Overlays
             progressDistribution: chartData.progressDistribution,
             atRiskDist: chartData.riskDistribution,
             completionStatus: chartData.completionStatus,
             courseProgress: chartData.courseProgress,
-            
-            // New Operational Layers
             attendanceStats,
             topGroups,
             formationStats: reportingStats
         })
     } catch (e) {
-        console.error('Stats endpoint error', e)
+        console.error('Stats endpoint error:', e.message)
         res.status(500).json({ success: false, message: 'Failed to fetch stats' })
     }
 })
@@ -174,133 +149,34 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
-
         const cacheKey = `cache:students:${user.id}:${celebrationPoint || 'global'}`
+        
         const cachedRes = await getCache(cacheKey)
-        if (cachedRes) {
-            return res.json(cachedRes)
-        }
+        if (cachedRes) return res.json(cachedRes)
 
         const result = await getStudentData(celebrationPoint)
         let students = result.students || []
 
-        // Facilitators: filter to only students in their assigned groups
         if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
             const members = await dbAll(`
-                SELECT fgm.student_id, fgm.student_name, fgm.student_email
+                SELECT fgm.student_id
                 FROM formation_group_members fgm
                 JOIN formation_groups fg ON fgm.formation_group_id = fg.id
                 WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
             `, [user.id, user.id])
-
             const memberIds = new Set(members.map(m => String(m.student_id)))
-            const memberEmails = new Set(members.filter(m => m.student_email).map(m => m.student_email.toLowerCase()))
-
-            students = students.filter(s => {
-                // Match by student_id or by email
-                if (s.id && memberIds.has(String(s.id))) return true
-                if (s.email && memberEmails.has(s.email.toLowerCase())) return true
-                return false
-            })
+            students = students.filter(s => memberIds.has(String(s.id || s.userId)))
         }
 
         const stats = getStats(students)
         const chartData = getChartData(students)
 
-        const payload = {
-            success: true,
-            students,
-            stats,
-            chartData,
-            lastUpdated: result.lastUpdated
-        }
-        await setCache(cacheKey, payload, 300) // 5 Min TTL
+        const payload = { success: true, students, stats, chartData, lastUpdated: result.lastUpdated }
+        await setCache(cacheKey, payload, 300)
         res.json(payload)
     } catch (error) {
         console.error('Get students error:', error)
-        res.json({ success: false, message: 'Failed to load student data' })
-    }
-})
-
-// Get inactive students — dedicated endpoint for "View Inactive Students"
-router.get('/inactive', requireAuth, applyCampusScope, async (req, res) => {
-    try {
-        const user = req.session.user
-        const campus = req.scopedCelebrationPoint || null
-        const result = await getStudentData(campus)
-
-        const threshold = parseInt(req.query.days) || 14 // Default 14 days
-        let inactive = (result.students || [])
-            .filter(s => s.daysInactive >= threshold)
-            .sort((a, b) => b.daysInactive - a.daysInactive)
-
-        // Facilitator filter — only their group members
-        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-            const groupMembers = await dbAll(`
-                SELECT fgm.student_id, fgm.student_email FROM formation_group_members fgm
-                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
-                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
-            `, [user.id, user.id])
-            const memberIds = new Set(groupMembers.map(m => String(m.student_id)))
-            const memberEmails = new Set(groupMembers.map(m => m.student_email).filter(Boolean))
-            inactive = inactive.filter(s =>
-                memberIds.has(String(s.userId)) || memberIds.has(String(s.id)) ||
-                memberEmails.has(s.email)
-            )
-        }
-
-        res.json({
-            success: true,
-            students: inactive,
-            total: inactive.length,
-            threshold,
-            lastUpdated: result.lastUpdated
-        })
-    } catch (error) {
-        console.error('Get inactive students error:', error)
-        res.status(500).json({ success: false, message: 'Failed to load inactive students' })
-    }
-})
-
-// Get available students for a group (not already in a group, filtered by campus)
-router.get('/available', requireAuth, applyCampusScope, async (req, res) => {
-    try {
-        const { group_id, search } = req.query
-        const celebrationPoint = req.scopedCelebrationPoint
-        
-        // 1. Get all students from cache for this campus
-        const result = await getStudentData(celebrationPoint)
-        const allStudents = result.students || []
-
-        // 2. Get IDs of students already in ANY group
-        const assigned = await dbAll('SELECT student_id FROM formation_group_members')
-        const assignedIds = new Set(assigned.map(a => String(a.student_id)))
-
-        // 3. Filter: not assigned to any group
-        let available = allStudents.filter(s => {
-            const id = String(s.id || s.userId)
-            return !assignedIds.has(id)
-        })
-
-        // 4. Filter by search if provided
-        if (search) {
-            const q = search.toLowerCase()
-            available = available.filter(s => 
-                (s.first_name || '').toLowerCase().includes(q) ||
-                (s.last_name || '').toLowerCase().includes(q) ||
-                (s.name || '').toLowerCase().includes(q) ||
-                (s.email || '').toLowerCase().includes(q)
-            )
-        }
-
-        res.json({
-            success: true,
-            students: available.slice(0, 50), // Limit to 50 for UI performance
-            total: available.length
-        })
-    } catch (error) {
-        console.error('Get available students error:', error)
-        res.status(500).json({ success: false, message: 'Failed to load available students' })
+        res.status(500).json({ success: false, message: 'Failed to load student data' })
     }
 })
 
@@ -309,218 +185,25 @@ router.get('/students/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const student = await getStudentById(id);
-        
-        if (!student) {
-            return res.status(404).json({ success: false, message: 'Student not found in cache' });
-        }
-
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
         const notes = await getNotes(id);
         const progress = getStudentProgress(id);
-
-        res.json({ 
-            success: true, 
-            student: { ...student, ...progress }, 
-            notes: notes || [] 
-        });
+        res.json({ success: true, student: { ...student, ...progress }, notes: notes || [] });
     } catch (error) {
-        console.error('Get student details error:', error);
         res.status(500).json({ success: false, message: 'Failed to load student details' });
     }
 })
 
-// Get paginated users (Unified Endpoint)
+// Get paginated users
 router.get('/users', requireAuth, applyCampusScope, async (req, res) => {
     try {
-        // Extract params
-        const { page, limit, type, search, date, noCompany, source } = req.query
-
         const result = await getPaginatedUsers({
-            page: page || 1,
-            limit: limit || 50,
-            type: type || 'enrolled',
-            search: search || '',
-            celebrationPoint: req.scopedCelebrationPoint || '',
-            date: date || '',
-            noCompany: noCompany === 'true',
-            source: source || 'all',
-            risk: req.query.risk || ''
+            ...req.query,
+            celebrationPoint: req.scopedCelebrationPoint || ''
         })
-
         res.json(result)
-
     } catch (error) {
-        console.error('Get paginated users error:', error)
         res.status(500).json({ success: false, message: 'Failed to load users' })
-    }
-})
-
-// Refresh data manually
-router.post('/refresh', requireAuth, async (req, res) => {
-    try {
-        forceRefresh()
-        res.json({ success: true, message: 'Data refresh started in background' })
-    } catch (error) {
-        res.json({ success: false, message: 'Refresh failed' })
-    }
-})
-
-// --- NOTES ENDPOINTS ---
-
-// Get notes for a student
-router.get('/notes/:studentId', requireAuth, async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        const notes = await getNotes(studentId);
-        res.json({ success: true, notes });
-    } catch (error) {
-        console.error('Get notes error:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch notes' });
-    }
-});
-
-// Add a note (PRD v2: includes author_role and note_type)
-router.post('/notes', requireAuth, async (req, res) => {
-    try {
-        const { studentId, groupId, content, celebrationPoint } = req.body;
-        const user = req.session.user;
-
-        if ((!studentId && !groupId) || !content) {
-            return res.status(400).json({ success: false, message: 'Missing required fields (studentId or groupId, and content)' });
-        }
-
-        const noteType = ROLE_NOTE_TYPE_MAP[user.role] || 'coordinator'
-        const cp = celebrationPoint || user.celebration_point || 'Unknown'
-
-        if (groupId) {
-            await addGroupNote(groupId, user.name, cp, content, user.role, noteType)
-            logAudit(user.name, user.role, 'ADD_NOTE', `Added ${noteType} note to group ${groupId}`)
-        } else {
-            await addNote(studentId, user.name, cp, content, user.role, noteType)
-            logAudit(user.name, user.role, 'ADD_NOTE', `Added ${noteType} note to student ${studentId}`)
-        }
-
-        res.json({ success: true, message: 'Note added' });
-    } catch (error) {
-        console.error('Add note error:', error);
-        res.status(500).json({ success: false, message: 'Failed to add note' });
-    }
-});
-
-// Get notes for a formation group
-router.get('/notes/group/:groupId', requireAuth, async (req, res) => {
-    try {
-        const { groupId } = req.params;
-        const notes = await getGroupNotes(groupId);
-        res.json({ success: true, notes });
-    } catch (error) {
-        console.error('Get group notes error:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch group notes' });
-    }
-});
-
-// ═══════════════════════════════════════════════════════
-// STUDENT TAGS (macOS Finder-style Tagging)
-// ═══════════════════════════════════════════════════════
-router.get('/tags', requireAuth, async (req, res) => {
-    try {
-        const tags = getAllTags()
-        res.json({ success: true, tags, colors: TAG_COLORS })
-    } catch (error) {
-        console.error('Get all tags error:', error)
-        res.status(500).json({ success: false, message: 'Failed to fetch tags' })
-    }
-})
-
-router.get('/tags/:studentId', requireAuth, async (req, res) => {
-    try {
-        const tags = getStudentTags(req.params.studentId)
-        res.json({ success: true, tags })
-    } catch (error) {
-        console.error('Get student tags error:', error)
-        res.status(500).json({ success: false, message: 'Failed to fetch student tags' })
-    }
-})
-
-router.post('/tags', requireAuth, async (req, res) => {
-    try {
-        const { studentId, tagName, color } = req.body
-        if (!studentId || !tagName) {
-            return res.status(400).json({ success: false, message: 'studentId and tagName required' })
-        }
-        addTag(studentId, tagName.trim(), color || '#007aff', req.user?.name)
-        res.json({ success: true })
-    } catch (error) {
-        console.error('Add tag error:', error)
-        res.status(500).json({ success: false, message: 'Failed to add tag' })
-    }
-})
-
-router.delete('/tags/:id', requireAuth, async (req, res) => {
-    try {
-        removeTag(req.params.id)
-        res.json({ success: true })
-    } catch (error) {
-        console.error('Remove tag error:', error)
-        res.status(500).json({ success: false, message: 'Failed to remove tag' })
-    }
-})
-
-// ═══════════════════════════════════════════════════════
-// UNIFIED SEARCH (Spotlight Search)
-// Search across students, groups, notes in one call
-// ═══════════════════════════════════════════════════════
-router.get('/search', requireAuth, async (req, res) => {
-    try {
-        const { q } = req.query
-        if (!q || q.trim().length < 2) {
-            return res.json({ success: true, results: { students: [], groups: [], notes: [] } })
-        }
-
-        const term = `%${q.trim()}%`
-        const { dbAll } = await import('../db/init.js')
-
-        // Search students
-        const students = (await dbAll(`
-            SELECT id, first_name, last_name, email, celebration_point, percentage_completed,
-                   risk_score, days_since_last_sign_in
-            FROM students
-            WHERE first_name LIKE ? OR last_name LIKE ? OR email LIKE ?
-            ORDER BY first_name
-            LIMIT 8
-        `, [term, term, term])).map(s => ({
-            ...s,
-            name: `${s.first_name || ''} ${s.last_name || ''}`.trim(),
-            type: 'student'
-        }))
-
-        // Search formation groups
-        const groups = (await dbAll(`
-            SELECT fg.id, fg.name, fg.group_code, fg.celebration_point, fg.active,
-                   u.name as facilitator_name,
-                   (SELECT COUNT(*) FROM formation_group_members WHERE formation_group_id = fg.id) as member_count
-            FROM formation_groups fg
-            LEFT JOIN users u ON fg.facilitator_user_id = u.id
-            WHERE fg.name LIKE ? OR fg.group_code LIKE ? OR fg.celebration_point LIKE ?
-            ORDER BY fg.name
-            LIMIT 6
-        `, [term, term, term])).map(g => ({ ...g, type: 'group' }))
-
-        // Search notes
-        const notes = (await dbAll(`
-            SELECT id, student_id, group_id, author_name, content, created_at
-            FROM notes
-            WHERE content LIKE ? OR author_name LIKE ?
-            ORDER BY created_at DESC
-            LIMIT 5
-        `, [term, term])).map(n => ({ ...n, type: 'note' }))
-
-        res.json({
-            success: true,
-            results: { students, groups, notes }
-        })
-    } catch (error) {
-        console.error('Unified search error:', error)
-        res.status(500).json({ success: false, message: 'Search failed' })
     }
 })
 

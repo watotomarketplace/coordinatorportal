@@ -9,6 +9,7 @@ import {
   Chart as ChartJS,
   ArcElement, CategoryScale, LinearScale, BarElement,
   Tooltip, Legend, PointElement, LineElement, Filler,
+  BarController, LineController, DoughnutController,
 } from 'chart.js'
 import { Doughnut, Bar, Line } from 'react-chartjs-2'
 import GlassCard from '../components/GlassCard'
@@ -21,7 +22,8 @@ import {
 
 ChartJS.register(
   ArcElement, CategoryScale, LinearScale, BarElement,
-  Tooltip, Legend, PointElement, LineElement, Filler
+  Tooltip, Legend, PointElement, LineElement, Filler,
+  BarController, LineController, DoughnutController,
 )
 
 const chartDefaults = {
@@ -214,14 +216,18 @@ export default function Dashboard() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const payload = await getDashboardStats(selectedCampus)
-        if (payload.success) {
+        // Use consolidated endpoint — returns correct active students, pastoral
+        // concerns, and all chart data aggregated from real sources.
+        const params = selectedCampus ? `?campus=${encodeURIComponent(selectedCampus)}` : ''
+        const payload = await api.get(`/api/dashboard/all${params}`)
+        if (payload?.success) {
           setData(payload)
         } else {
           setData({})
         }
       } catch (err) {
         console.error('Dashboard load error:', err)
+        setData({})
       } finally {
         setLoading(false)
       }
@@ -254,7 +260,7 @@ export default function Dashboard() {
   const inactiveCount = data?.inactiveCount || 0
   const atRiskCount = data?.atRiskCount || 0
   const atRiskDist = data?.atRiskDist || { healthy: 0, attention: 0, critical: 0 }
-  const progressDistribution = data?.progressDistribution || [0, 0, 0, 0]
+  const progressDistribution = data?.progressDistribution || [0, 0, 0, 0, 0]
   const attendanceStats = data?.attendanceStats || { avgAttendance: 0, totalSessions: 0, trend: [] }
   const formationStats = data?.formationStats || { compliance: 0, totalReports: 0, pastoralConcerns: 0, trends: [] }
   const topGroups = data?.topGroups || []
@@ -275,7 +281,7 @@ export default function Dashboard() {
   }
 
   const progressData = {
-    labels: ['0-25%', '26-50%', '51-75%', '76-100%'],
+    labels: ['0-19%', '20-39%', '40-59%', '60-79%', '80-100%'],
     datasets: [{
       label: 'Students',
       data: progressDistribution,
@@ -301,9 +307,9 @@ export default function Dashboard() {
   }
 
   const completionData = {
-    labels: ['On Track (75%+)', 'In Progress', 'Needs Help (<30%)'],
+    labels: ['On Track (75%+)', 'In Progress (30-74%)', 'Needs Help (<30%)'],
     datasets: [{
-      data: data?.completionStatus || [0, 0, 0],
+      data: Array.isArray(data?.completionStatus) ? data.completionStatus : [0, 0, 0],
       backgroundColor: ['#34C759', '#0A84FF', '#FF453A'],
       borderWidth: 0,
     }],

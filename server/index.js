@@ -24,6 +24,7 @@ import exportRoutes from './routes/exports.js'
 import diagnosticRoutes from './routes/diagnostics.js'
 import userPreferencesRoutes from './routes/user-preferences.js'
 import dashboardSummaryRoutes from './routes/dashboard-summary.js'
+import dashboardAllRoutes from './routes/dashboard-all.js'
 import { initDatabase } from './db/init.js'
 import { preWarmCache, getCacheStatus } from './services/thinkific.js'
 import { initScheduler } from './services/scheduler.js'
@@ -100,6 +101,7 @@ app.use('/api/user/preferences', userPreferencesRoutes)
 app.use('/api/queue', queueRoutes)
 app.use('/api/webhooks', webhookRoutes)
 app.use('/api/public', imageRoutes)
+app.use('/api/dashboard/all', dashboardAllRoutes)
 app.use('/api/dashboard', dashboardSummaryRoutes)
 
 // Health check

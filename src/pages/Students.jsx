@@ -6,14 +6,22 @@ import api from '../lib/api'
 import { Search, Filter, ChevronRight, User, AlertTriangle, CheckCircle, Clock, MessageSquare, Send, Phone, Calendar, MapPin, Flag, BarChart2, TrendingUp, Target, X, Check, Download } from 'lucide-react'
 import { exportToCSV } from '../lib/export'
 
+function getStudentName(s) {
+  if (s.name && s.name.trim()) return s.name.trim()
+  const full = `${s.first_name || ''} ${s.last_name || ''}`.trim()
+  return full || s.student_name || s.email || 'Unknown'
+}
+
 function StudentAvatar({ student }) {
-  const initials = ((student.first_name || '')[0] || '') + ((student.last_name || '')[0] || '')
+  const displayName = getStudentName(student)
+  const words = displayName.split(' ')
+  const initials = (words[0]?.[0] || '') + (words[1]?.[0] || '')
   const colors = ['#6366f1', '#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#ef4444', '#ec4899']
   const bg = colors[Math.abs((student.id || 0) % colors.length)]
   return (
     <div className="avatar" style={{ background: bg }}>
       {student.profile_image
-        ? <img src={student.profile_image} alt={student.first_name} />
+        ? <img src={student.profile_image} alt={displayName} />
         : initials.toUpperCase() || '?'
       }
     </div>
@@ -96,7 +104,7 @@ function ProgressModal({ student, onClose }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 640 }}>
         <div className="modal-header">
-          <span className="modal-title">Progress Report: {student.first_name || student.name || 'Student'}</span>
+          <span className="modal-title">Progress Report: {getStudentName(student)}</span>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -313,7 +321,7 @@ export default function Students() {
               >
                 <StudentAvatar student={s} />
                 <div className="list-item-info">
-                  <div className="list-item-name">{s.first_name} {s.last_name}</div>
+                  <div className="list-item-name">{getStudentName(s)}</div>
                   <div className="list-item-sub">{s.email || s.celebration_point || '—'}</div>
                 </div>
                 <RiskDot risk={s.risk_category} />
@@ -334,11 +342,11 @@ export default function Students() {
               <div className="detail-header">
                 <div className="detail-avatar">
                   {detail.profile_image
-                    ? <img src={detail.profile_image} alt={detail.first_name} />
-                    : ((detail.first_name || '?')[0] + (detail.last_name || '')[0]).toUpperCase()
+                    ? <img src={detail.profile_image} alt={getStudentName(detail)} />
+                    : (() => { const n = getStudentName(detail).split(' '); return ((n[0]?.[0] || '') + (n[1]?.[0] || '')).toUpperCase() || '?' })()
                   }
                 </div>
-                <div className="detail-name">{detail.first_name} {detail.last_name}</div>
+                <div className="detail-name">{getStudentName(detail)}</div>
                 <div className="detail-subtitle">{detail.email}</div>
                 <div className="detail-badges">
                   {detail.status && <span className={`badge badge-dot badge-${detail.status === 'Completed' ? 'success' : 'warning'}`}>{detail.status}</span>}
@@ -474,7 +482,7 @@ export default function Students() {
           <div key={s.id} className="ios-row" onClick={() => setSelected(s.id)}>
             <StudentAvatar student={s} />
             <div className="ios-row-main">
-              <div className="ios-row-title">{s.first_name} {s.last_name}</div>
+              <div className="ios-row-title">{getStudentName(s)}</div>
               <div className="ios-row-subtitle">{s.email || s.celebration_point || '—'}</div>
             </div>
             <RiskDot risk={s.risk_category} />

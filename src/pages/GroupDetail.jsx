@@ -26,9 +26,10 @@ export function AddMemberModal({ groupId, onClose, onAdded }) {
   const handleAdd = async (student) => {
     setAdding(student.id)
     try {
-      await api.post(`/api/formation-groups/${groupId}/members`, { 
+      const displayName = student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim() || student.email
+      await api.post(`/api/formation-groups/${groupId}/members`, {
         student_id: student.id,
-        student_name: `${student.first_name} ${student.last_name}`,
+        student_name: displayName,
         student_email: student.email
       })
       onAdded()
@@ -59,10 +60,10 @@ export function AddMemberModal({ groupId, onClose, onAdded }) {
                 padding: '10px 0', borderBottom: '1px solid var(--border-subtle)',
               }}>
                 <div className="avatar avatar-sm" style={{ background: '#6366f1' }}>
-                  {((s.first_name || '?')[0] + (s.last_name || '')[0]).toUpperCase()}
+                  {(() => { const n = (s.name || `${s.first_name || ''} ${s.last_name || ''}`.trim() || '?').split(' '); return ((n[0]?.[0] || '') + (n[1]?.[0] || '')).toUpperCase() || '?' })()}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{s.first_name} {s.last_name}</div>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{s.name || `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{s.email}</div>
                 </div>
                 <button
@@ -390,7 +391,7 @@ export function GroupOverviewTabs({ group, reports, currentUser, onUpdated }) {
               comments.map((comment, i) => (
                 <div key={i} style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 12, marginBottom: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>{comment.author} · {comment.role}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>{comment.author_name}</span>
                     <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{new Date(comment.created_at).toLocaleString()}</span>
                   </div>
                   <p style={{ fontSize: 14, margin: 0, color: 'var(--text-primary)' }}>{comment.content}</p>
@@ -424,6 +425,8 @@ export default function GroupDetail() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
   const platform = useAppStore(s => s.platform)
   const hasRole = useAuthStore(s => s.hasRole)
+
+  const user = useAuthStore(s => s.user)
 
   const [group, setGroup] = useState(null)
   const [members, setMembers] = useState([])
@@ -460,10 +463,14 @@ export default function GroupDetail() {
     } catch (err) { alert(err.message) }
   }
 
-  const filteredMembers = members.filter(m =>
-    m.student_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    m.student_email?.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredMembers = members.filter(m => {
+    if (!searchQuery) return true
+    const q = searchQuery.toLowerCase()
+    return (m.student_name || '').toLowerCase().includes(q) ||
+      (m.name || '').toLowerCase().includes(q) ||
+      (m.student_email || '').toLowerCase().includes(q) ||
+      (m.email || '').toLowerCase().includes(q)
+  })
 
   if (loading) return <div style={{ padding: 24 }}>{[0, 1, 2, 3].map(i => <div key={i} className="skeleton skeleton-row" />)}</div>
 
@@ -631,7 +638,7 @@ export default function GroupDetail() {
               onClose={() => setSelectedMember(null)}
             />
           ) : (
-            <GroupOverviewTabs group={group} reports={reports} currentUser={user} onUpdated={loadData} />
+            <GroupOverviewTabs group={group} reports={reports} currentUser={user} onUpdated={loadGroup} />
           )}
         </div>
       </div>

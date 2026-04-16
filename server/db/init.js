@@ -398,6 +398,44 @@ async function runMigrations() {
     console.log('✅ Default admin user created')
   }
 
+  // ─── Assigned groups column (used by admin user management) ─────────────
+  try { await dbRun("ALTER TABLE users ADD COLUMN assigned_groups TEXT DEFAULT '[]'") } catch (_) {}
+
+  // ─── Group comments ───────────────────────────────────────────────────────
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS group_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        formation_group_id INTEGER NOT NULL REFERENCES formation_groups(id),
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+  } catch (_) {}
+
+  // ─── Normalize celebration_point casing in formation_groups and users ──────
+  // Fixes rows created with wrong case (e.g. 'ntinda' → 'Ntinda', 'online' → 'Online')
+  try {
+    const CANONICAL_CAMPUSES = [
+      'Bbira', 'Bugolobi', 'Bweyogerere', 'Downtown', 'Entebbe', 'Gulu',
+      'Jinja', 'Juba', 'Kansanga', 'Kyengera', 'Laminadera', 'Lubowa',
+      'Mbarara', 'Mukono', 'Nakwero', 'Nansana', 'Ntinda', 'Online', 'Suubi'
+    ]
+    for (const campus of CANONICAL_CAMPUSES) {
+      await dbRun(
+        `UPDATE formation_groups SET celebration_point = ? WHERE LOWER(celebration_point) = LOWER(?) AND celebration_point != ?`,
+        [campus, campus, campus]
+      )
+      await dbRun(
+        `UPDATE users SET celebration_point = ? WHERE LOWER(celebration_point) = LOWER(?) AND celebration_point != ?`,
+        [campus, campus, campus]
+      )
+    }
+  } catch (e) {
+    console.error('⚠️ Campus normalization migration failed:', e.message)
+  }
+
   console.log('✅ Database schemas verified/initialized')
 
   await seedFormationGroups()

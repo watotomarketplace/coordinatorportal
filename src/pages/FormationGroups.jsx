@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { GroupOverviewTabs, MemberDetailPanel, AttendanceRing, AddMemberModal } from './GroupDetail'
 import { exportToCSV } from '../lib/export'
+import { CELEBRATION_POINTS } from '../constants/campuses'
 
 const CAMPUS_CODES = {
   WBB: 'Bbira', WBG: 'Bugolobi', WBW: 'Bweyogerere', WDT: 'Downtown',
@@ -126,9 +127,7 @@ export default function FormationGroups() {
     }
   }, [selectedGroupId, platform])
 
-  const campuses = useMemo(() =>
-    ['All', ...new Set(groups.map(g => g.celebration_point).filter(Boolean))].sort()
-    , [groups])
+  const campuses = ['All', ...CELEBRATION_POINTS]
 
   const filtered = useMemo(() => {
     let list = groups

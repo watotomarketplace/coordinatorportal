@@ -6,10 +6,11 @@ import {
   Chart as ChartJS,
   ArcElement, CategoryScale, LinearScale, BarElement,
   Tooltip, Legend, PointElement, LineElement, Filler,
+  BarController, LineController, DoughnutController,
 } from 'chart.js'
 import { Bar, Line, Doughnut } from 'react-chartjs-2'
 
-ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Tooltip, Legend, PointElement, LineElement, Filler)
+ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Tooltip, Legend, PointElement, LineElement, Filler, BarController, LineController, DoughnutController)
 
 export default function Analytics() {
   const setPageTitle = useAppStore(s => s.setPageTitle)

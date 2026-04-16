@@ -59,14 +59,22 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             value: 0
         }))
 
+        let totalSessions = 0
+        let attSum = 0
+        let attWeeks = 0
         attendanceTrend.forEach(t => {
             const wk = parseInt(t.week_number, 10)
             if (wk >= 1 && wk <= 13) {
-                attendanceByWeek[wk - 1].value = Math.round(t.avg_att || 0)
+                const val = Math.round(t.avg_att || 0)
+                attendanceByWeek[wk - 1].value = val
+                totalSessions += parseInt(t.session_count, 10) || 0
+                if (t.avg_att != null) { attSum += val; attWeeks++ }
             }
         })
 
         attendanceStats.trend = attendanceByWeek
+        attendanceStats.totalSessions = totalSessions
+        attendanceStats.avgAttendance = attWeeks > 0 ? Math.round(attSum / attWeeks) : 0
 
         // Fetch Top Groups by Sessions
         topGroups = await dbAll(`
@@ -180,6 +188,45 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     }
 })
 
+// Get students available to add to a group (not already members, campus-scoped)
+// GET /api/data/available?group_id=123&search=name
+router.get('/available', requireAuth, applyCampusScope, async (req, res) => {
+    try {
+        const { group_id, search } = req.query
+        const celebrationPoint = req.scopedCelebrationPoint
+
+        const result = await getStudentData(celebrationPoint)
+        let students = result.students || []
+
+        // Exclude students already in the group
+        if (group_id) {
+            const existing = await dbAll(
+                'SELECT student_id FROM formation_group_members WHERE formation_group_id = ?',
+                [group_id]
+            )
+            const existingIds = new Set(existing.map(r => String(r.student_id)))
+            students = students.filter(s => !existingIds.has(String(s.id)))
+        }
+
+        // Apply search filter
+        if (search && search.length >= 2) {
+            const q = search.toLowerCase()
+            students = students.filter(s =>
+                (s.name || '').toLowerCase().includes(q) ||
+                (s.email || '').toLowerCase().includes(q)
+            )
+        }
+
+        // Limit results to prevent huge payloads
+        students = students.slice(0, 50)
+
+        res.json({ success: true, students })
+    } catch (error) {
+        console.error('GET /data/available error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to load available students' })
+    }
+})
+
 // Get individual student details
 router.get('/students/:id', requireAuth, async (req, res) => {
     try {
@@ -191,6 +238,21 @@ router.get('/students/:id', requireAuth, async (req, res) => {
         res.json({ success: true, student: { ...student, ...progress }, notes: notes || [] });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to load student details' });
+    }
+})
+
+// Add note to a student
+router.post('/students/:id/notes', requireAuth, async (req, res) => {
+    try {
+        const { id } = req.params
+        const { content } = req.body
+        if (!content || !content.trim()) return res.status(400).json({ success: false, message: 'Content required' })
+        const user = req.session.user
+        await addNote(id, user.name || user.username, user.celebration_point || '', content.trim(), user.role)
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Add note error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to add note' })
     }
 })
 

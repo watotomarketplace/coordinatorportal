@@ -42,7 +42,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         const targetWeek = currentWeek > 1 ? currentWeek - 1 : 0
 
         const overdueCheck = targetWeek > 0 ? `
-            , (SELECT COUNT(*) = 0 FROM weekly_reports wr WHERE wr.formation_group_id = fg.id AND wr.week_number = ${targetWeek}) as is_overdue
+            , (SELECT CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END FROM weekly_reports wr WHERE wr.formation_group_id = fg.id AND wr.week_number = ${targetWeek}) as is_overdue
         ` : ', 0 as is_overdue'
 
         let groups = []
@@ -74,7 +74,8 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
 
         res.json({ success: true, groups })
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Failed to fetch groups' })
+        console.error('GET /formation-groups error:', error.message, error.stack)
+        res.status(500).json({ success: false, message: 'Failed to fetch groups', detail: error.message })
     }
 })
 
@@ -99,7 +100,15 @@ router.get('/:id', requireAuth, async (req, res) => {
 
         let members = await dbAll(`
             SELECT fgm.student_id, fgm.student_name, fgm.student_email,
-                (SELECT COUNT(*) FROM session_attendance sa JOIN group_sessions gs ON sa.session_id = gs.id WHERE sa.student_id = fgm.student_id AND gs.formation_group_id = fgm.formation_group_id AND sa.attended = 1 AND gs.did_not_meet = 0) as attended,
+                (SELECT COUNT(*)
+                    FROM session_attendance sa
+                    JOIN group_sessions gs ON sa.session_id = gs.id
+                    JOIN group_members gm ON sa.group_member_id = gm.id
+                    WHERE gm.student_thinkific_id = fgm.student_id
+                      AND gs.formation_group_id = fgm.formation_group_id
+                      AND sa.attended = 1
+                      AND gs.did_not_meet = 0
+                ) as attended,
                 (SELECT COUNT(*) FROM group_sessions gs WHERE gs.formation_group_id = fgm.formation_group_id AND gs.did_not_meet = 0) as total
             FROM formation_group_members fgm
             WHERE fgm.formation_group_id = ?
@@ -118,7 +127,25 @@ router.get('/:id', requireAuth, async (req, res) => {
 
         res.json({ success: true, group, members, reports })
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Failed to fetch group details' })
+        console.error('GET /formation-groups/:id error:', error.message, error.stack)
+        res.status(500).json({ success: false, message: 'Failed to fetch group details', detail: error.message })
+    }
+})
+
+// --- CREATE GROUP ---
+router.post('/', requireAdminOrTechSupport, async (req, res) => {
+    try {
+        const { celebration_point, cohort, facilitator_user_id, co_facilitator_user_id } = req.body
+        if (!celebration_point) return res.status(400).json({ success: false, message: 'celebration_point required' })
+        const group_code = await generateGroupCode(celebration_point)
+        const result = await dbRun(
+            'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
+            [group_code, group_code, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort || null]
+        )
+        res.json({ success: true, group_code, id: result.lastID ?? result })
+    } catch (error) {
+        console.error('POST /formation-groups error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to create group', detail: error.message })
     }
 })
 
@@ -126,15 +153,108 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.put('/:id', requireAdminOrTechSupport, async (req, res) => {
     try {
         const { id } = req.params
-        const { facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
+        const { group_code, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
         await dbRun(`
-            UPDATE formation_groups 
-            SET facilitator_user_id = ?, co_facilitator_user_id = ?, cohort = ?, active = ?
+            UPDATE formation_groups
+            SET group_code = ?, name = ?, celebration_point = ?,
+                facilitator_user_id = ?, co_facilitator_user_id = ?, cohort = ?, active = ?
             WHERE id = ?
-        `, [facilitator_user_id, co_facilitator_user_id, cohort, active, id])
+        `, [group_code, group_code, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort, active ?? 1, id])
         res.json({ success: true })
     } catch (error) {
+        console.error('PUT /formation-groups/:id error:', error.message)
         res.status(500).json({ success: false, message: 'Failed to update group' })
+    }
+})
+
+// --- ADD MEMBER ---
+// POST /api/formation-groups/:id/members
+router.post('/:id/members', requireAuth, async (req, res) => {
+    try {
+        const user = req.session.user
+        const groupId = req.params.id
+
+        // Facilitators may only add to their own groups
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+            const group = await dbGet('SELECT facilitator_user_id, co_facilitator_user_id FROM formation_groups WHERE id = ?', [groupId])
+            if (!group || (group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id)) {
+                return res.status(403).json({ success: false, message: 'Access denied' })
+            }
+        }
+
+        const { student_id, student_name, student_email } = req.body
+        if (!student_id) return res.status(400).json({ success: false, message: 'student_id required' })
+
+        // Prevent duplicate membership
+        const existing = await dbGet(
+            'SELECT id FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
+            [groupId, String(student_id)]
+        )
+        if (existing) return res.status(400).json({ success: false, message: 'Student is already in this group' })
+
+        await dbRun(
+            'INSERT INTO formation_group_members (formation_group_id, student_id, student_name, student_email) VALUES (?, ?, ?, ?)',
+            [groupId, String(student_id), student_name || '', student_email || '']
+        )
+        res.json({ success: true })
+    } catch (error) {
+        console.error('POST /formation-groups/:id/members error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to add member' })
+    }
+})
+
+// --- REMOVE MEMBER ---
+// DELETE /api/formation-groups/:id/members/:studentId
+router.delete('/:id/members/:studentId', requireAuth, async (req, res) => {
+    try {
+        const user = req.session.user
+        // Only Admin, Coordinator, TechSupport may remove members
+        const canRemove = ['Admin', 'Coordinator', 'TechSupport'].some(r => user.role === r ||
+            (user.secondary_roles && JSON.parse(user.secondary_roles || '[]').includes(r)))
+        if (!canRemove) return res.status(403).json({ success: false, message: 'Access denied' })
+
+        await dbRun(
+            'DELETE FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
+            [req.params.id, String(req.params.studentId)]
+        )
+        res.json({ success: true })
+    } catch (error) {
+        console.error('DELETE /formation-groups/:id/members/:studentId error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to remove member' })
+    }
+})
+
+// --- GET COMMENTS ---
+router.get('/:id/comments', requireAuth, async (req, res) => {
+    try {
+        const comments = await dbAll(`
+            SELECT gc.id, gc.content, gc.created_at, u.name as author_name, u.profile_image
+            FROM group_comments gc
+            JOIN users u ON gc.user_id = u.id
+            WHERE gc.formation_group_id = ?
+            ORDER BY gc.created_at DESC
+        `, [req.params.id])
+        res.json({ success: true, comments })
+    } catch (error) {
+        console.error('GET /formation-groups/:id/comments error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to fetch comments' })
+    }
+})
+
+// --- ADD COMMENT ---
+router.post('/:id/comments', requireAuth, async (req, res) => {
+    try {
+        const { content } = req.body
+        if (!content || !content.trim()) return res.status(400).json({ success: false, message: 'Content required' })
+        const user = req.session.user
+        await dbRun(
+            'INSERT INTO group_comments (formation_group_id, user_id, content) VALUES (?, ?, ?)',
+            [req.params.id, user.id, content.trim()]
+        )
+        res.json({ success: true })
+    } catch (error) {
+        console.error('POST /formation-groups/:id/comments error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to add comment' })
     }
 })
 

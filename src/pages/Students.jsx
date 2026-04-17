@@ -261,7 +261,7 @@ export default function Students() {
 
   if (platform === 'desktop') {
     return (
-      <div className="three-col">
+      <div className="three-col" style={{ height: 'calc(100vh - 195px)', maxHeight: 'calc(100vh - 195px)' }}>
         {showProgressModal && <ProgressModal student={detail} onClose={() => setShowProgressModal(false)} />}
         <div className="col-sidebar">
           <div className="sidebar-title">Filters</div>
@@ -457,9 +457,130 @@ export default function Students() {
     )
   }
 
+  // Mobile bottom sheet — shown when a student is tapped
+  const mobileSheetOpen = !!selected && !!detail
+
   return (
     <div>
       {showProgressModal && <ProgressModal student={detail} onClose={() => setShowProgressModal(false)} />}
+
+      {/* Mobile Bottom Sheet */}
+      {selected && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: mobileSheetOpen ? 'rgba(0,0,0,0.5)' : 'transparent',
+            transition: 'background 0.25s',
+            pointerEvents: mobileSheetOpen ? 'all' : 'none',
+          }}
+          onClick={() => setSelected(null)}
+        >
+          <div
+            style={{
+              position: 'absolute', bottom: 0, left: 0, right: 0,
+              background: 'var(--bg-secondary)',
+              borderRadius: '20px 20px 0 0',
+              border: '1px solid rgba(255,255,255,0.12)',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              transform: mobileSheetOpen ? 'translateY(0)' : 'translateY(100%)',
+              transition: 'transform 0.3s cubic-bezier(0.32,0.72,0,1)',
+              paddingBottom: 'env(safe-area-inset-bottom, 16px)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Handle bar */}
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 4px' }}>
+              <div style={{ width: 36, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.2)' }} />
+            </div>
+
+            {/* Close button */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 16px' }}>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setSelected(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {detail ? (
+              <div style={{ padding: '0 20px 24px' }}>
+                {/* Student header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+                  <div className="avatar" style={{ width: 52, height: 52, fontSize: 20, background: '#6366f1', flexShrink: 0 }}>
+                    {detail.profile_image
+                      ? <img src={detail.profile_image} alt={getStudentName(detail)} />
+                      : (() => { const n = getStudentName(detail).split(' '); return ((n[0]?.[0] || '') + (n[1]?.[0] || '')).toUpperCase() || '?' })()
+                    }
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>{getStudentName(detail)}</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>{detail.email || '—'}</div>
+                    <div style={{ marginTop: 6 }}>
+                      <RiskBadge category={detail.riskIntelligence || detail.risk_category || 'Healthy'} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+                  {[
+                    { label: 'Days Inactive', value: detail.daysInactive ?? 0, color: (detail.daysInactive || 0) >= 30 ? '#FF453A' : (detail.daysInactive || 0) >= 14 ? '#FF9F0A' : '#34C759' },
+                    { label: 'Completion', value: `${detail.completionRate || detail.progress || 0}%`, color: '#4A9EFF' },
+                    { label: 'Campus', value: detail.celebration_point || '—', color: 'var(--text-primary)' },
+                    { label: 'Course', value: detail.course || 'WL101', color: 'var(--text-primary)' },
+                  ].map(stat => (
+                    <div key={stat.label} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 12, padding: '12px 14px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>{stat.label}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: stat.color }}>{stat.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Risk metrics */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10 }}>Risk Metrics</div>
+                  <MetricBar label="Login Recency" value={detail.loginRecency || 0} color="#4A9EFF" />
+                  <MetricBar label="Completion Rate" value={detail.completionRate || detail.progress || 0} color="#34C759" />
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+                  <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => window.location.href = `mailto:${detail.email}`}>
+                    <MessageSquare size={14} style={{ marginRight: 6 }} /> Email
+                  </button>
+                  <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowProgressModal(true)}>
+                    <BarChart2 size={14} style={{ marginRight: 6 }} /> Progress
+                  </button>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10 }}>Notes ({notes.length})</div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                    <input
+                      className="form-input"
+                      placeholder="Add a note…"
+                      value={noteText}
+                      onChange={e => setNoteText(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSaveNote()}
+                      style={{ flex: 1, fontSize: 14 }}
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={handleSaveNote} disabled={savingNote || !noteText.trim()}>
+                      <Send size={14} />
+                    </button>
+                  </div>
+                  {notes.slice(0, 3).map((n, i) => <NoteItem key={n.id || i} note={n} />)}
+                  {notes.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-tertiary)', fontSize: 13 }}>No notes yet</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="ios-large-title">Students</div>
       <div className="mobile-search">
         <Search size={16} />

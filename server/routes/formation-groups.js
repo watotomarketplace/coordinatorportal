@@ -1,6 +1,6 @@
 import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
-import { requireAuth, requireAdminOrTechSupport, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
+import { requireAuth, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
 import { getStudentById } from '../services/thinkific.js'
 
 const router = express.Router()
@@ -133,10 +133,18 @@ router.get('/:id', requireAuth, async (req, res) => {
 })
 
 // --- CREATE GROUP ---
-router.post('/', requireAdminOrTechSupport, async (req, res) => {
+router.post('/', requireGroupManager, async (req, res) => {
     try {
+        const user = req.session.user
         const { celebration_point, cohort, facilitator_user_id, co_facilitator_user_id } = req.body
         if (!celebration_point) return res.status(400).json({ success: false, message: 'celebration_point required' })
+
+        // Campus-scoped roles can only create groups for their own campus
+        const isCampusScoped = !userHasAnyRole(user, ['Admin'])
+        if (isCampusScoped && celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: `You can only create groups for your campus (${user.celebration_point})` })
+        }
+
         const group_code = await generateGroupCode(celebration_point)
         const result = await dbRun(
             'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
@@ -150,10 +158,22 @@ router.post('/', requireAdminOrTechSupport, async (req, res) => {
 })
 
 // --- UPDATE GROUP ---
-router.put('/:id', requireAdminOrTechSupport, async (req, res) => {
+router.put('/:id', requireGroupManager, async (req, res) => {
     try {
+        const user = req.session.user
         const { id } = req.params
         const { group_code, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active } = req.body
+
+        // Campus-scoped roles can only edit groups in their own campus
+        const isCampusScoped = !userHasAnyRole(user, ['Admin'])
+        if (isCampusScoped) {
+            const existing = await dbGet('SELECT celebration_point FROM formation_groups WHERE id = ?', [id])
+            if (!existing) return res.status(404).json({ success: false, message: 'Group not found' })
+            if (existing.celebration_point !== user.celebration_point) {
+                return res.status(403).json({ success: false, message: `You can only edit groups for your campus (${user.celebration_point})` })
+            }
+        }
+
         await dbRun(`
             UPDATE formation_groups
             SET group_code = ?, name = ?, celebration_point = ?,

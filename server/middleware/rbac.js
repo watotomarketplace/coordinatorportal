@@ -67,6 +67,15 @@ function requireAdminOrTechSupport(req, res, next) {
     next()
 }
 
+// Admin, TechSupport, Coordinator, Pastor — can create/edit formation groups (campus-scoped enforced in handler)
+function requireGroupManager(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    if (!userHasAnyRole(req.session.user, ['Admin', 'TechSupport', 'Coordinator', 'Pastor'])) {
+        return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    next()
+}
+
 function requireCanImport(req, res, next) {
     if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
     if (!userHasAnyRole(req.session.user, ['Admin', 'Coordinator'])) {
@@ -103,17 +112,18 @@ function applyCampusScope(req, res, next) {
     next()
 }
 
-export { 
-    CAMPUS_SCOPED_ROLES, 
-    GLOBAL_ROLES, 
-    getUserRoles, 
-    userRoles, 
-    userHasRole, 
-    userHasAnyRole, 
-    requireAuth, 
-    requireAdmin, 
-    requireAdminOrLeadership, 
-    requireAdminOrTechSupport, 
-    requireCanImport, 
-    applyCampusScope 
+export {
+    CAMPUS_SCOPED_ROLES,
+    GLOBAL_ROLES,
+    getUserRoles,
+    userRoles,
+    userHasRole,
+    userHasAnyRole,
+    requireAuth,
+    requireAdmin,
+    requireAdminOrLeadership,
+    requireAdminOrTechSupport,
+    requireGroupManager,
+    requireCanImport,
+    applyCampusScope
 }

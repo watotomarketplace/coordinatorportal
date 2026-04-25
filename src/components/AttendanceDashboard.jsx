@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import GroupAttendance from './GroupAttendance.jsx';
 import AttendanceRing from './AttendanceRing.jsx';
 import { exportToCSV } from '../lib/export';
+import api from '../lib/api';
 
 const glass = { background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', border: '1px solid var(--glass-border)', borderRadius: 16 }
 
@@ -39,8 +40,7 @@ export function DashboardWidget() {
     const [loading, setLoading] = React.useState(true)
 
     React.useEffect(() => {
-        fetch('/api/attendance/dashboard')
-            .then(r => r.json())
+        api.get('/api/attendance/dashboard')
             .then(json => { if (json.success) setData(json) })
             .catch(() => {})
             .finally(() => setLoading(false))
@@ -179,8 +179,7 @@ export default function AttendanceDashboard() {
     React.useEffect(() => {
         async function init() {
             try {
-                const sessionRes = await fetch('/api/auth/session')
-                const sessionData = await sessionRes.json()
+                const sessionData = await api.get('/api/auth/session')
                 if (!sessionData.user) {
                     setError('Not authenticated')
                     return
@@ -192,8 +191,7 @@ export default function AttendanceDashboard() {
             }
 
             try {
-                const dashRes = await fetch('/api/attendance/dashboard')
-                const dashData = await dashRes.json()
+                const dashData = await api.get('/api/attendance/dashboard')
                 if (dashData.success) {
                     setSummary(dashData.summary)
                     setGroups(dashData.groups || [])

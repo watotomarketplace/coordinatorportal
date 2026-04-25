@@ -304,9 +304,9 @@ export function GroupOverviewTabs({ group, reports, currentUser, onUpdated }) {
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Group Overview</h3>
-            {(currentUser?.role === 'Admin' || currentUser?.role === 'TechSupport') && (
-              <button 
-                className="btn btn-ghost btn-sm" 
+            {['Admin', 'TechSupport', 'Coordinator', 'Pastor'].includes(currentUser?.role) && (
+              <button
+                className="btn btn-ghost btn-sm"
                 onClick={() => setShowEditModal(true)}
                 style={{ height: 28, padding: '0 8px', gap: 4 }}
               >

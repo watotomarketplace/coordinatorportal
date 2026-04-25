@@ -169,7 +169,7 @@ export default function FormationGroups() {
           <div style={{ padding: '20px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700 }}>Groups ({filtered.length})</h2>
-              {(hasRole('Admin') || hasRole('Coordinator')) && (
+              {(hasRole('Admin') || hasRole('Coordinator') || hasRole('TechSupport') || hasRole('Pastor')) && (
                 <button className="btn btn-primary btn-icon btn-sm" onClick={() => setShowCreate(true)}>
                   <Plus size={16} />
                 </button>
@@ -351,7 +351,7 @@ export default function FormationGroups() {
         ))}
       </div>
 
-      {(hasRole('Admin') || hasRole('Coordinator')) && (
+      {(hasRole('Admin') || hasRole('Coordinator') || hasRole('TechSupport') || hasRole('Pastor')) && (
         <button className="fab" onClick={() => setShowCreate(true)}><Plus size={24} /></button>
       )}
       {showCreate && <CreateGroupModal onClose={() => setShowCreate(false)} onCreated={loadGroups} />}

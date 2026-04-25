@@ -175,6 +175,7 @@ router.post('/group/:groupId/sessions', requireAuth, async (req, res) => {
             'INSERT INTO group_sessions (formation_group_id, session_date, week_number, facilitator_user_id, notes, did_not_meet) VALUES (?, ?, ?, ?, ?, ?)',
             [groupId, session_date, week_number || null, req.session.user.id, notes || null, did_not_meet ? 1 : 0]
         )
+        await invalidatePattern('cache:dashboard:*')
         res.json({ success: true, sessionId: result.lastInsertRowid })
     } catch (error) {
         console.error('Create session error:', error)
@@ -288,6 +289,7 @@ router.delete('/sessions/:sessionId', requireAuth, async (req, res) => {
         // Delete attendance records first, then the session
         await dbRun('DELETE FROM session_attendance WHERE session_id = ?', [sessionId])
         await dbRun('DELETE FROM group_sessions WHERE id = ?', [sessionId])
+        await invalidatePattern('cache:dashboard:*')
         res.json({ success: true })
     } catch (error) {
         console.error('Delete session error:', error)

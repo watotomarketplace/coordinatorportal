@@ -21,18 +21,40 @@ const CAMPUS_CODES = {
 }
 
 function CreateGroupModal({ onClose, onCreated }) {
-  const [form, setForm] = useState({ campus_code: 'WNT' })
+  const [campusCode, setCampusCode] = useState('WNT')
+  const [groupNumber, setGroupNumber] = useState('')
+  const [existingCodes, setExistingCodes] = useState([])
+  const [nextNum, setNextNum] = useState(1)
+  const [loadingCodes, setLoadingCodes] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  const handleSave = async () => {
-    setSaving(true)
+  const fetchCodes = async (code) => {
+    setLoadingCodes(true)
     try {
-      const celebration_point = CAMPUS_CODES[form.campus_code]
-      await api.post('/api/formation-groups', {
-        name: form.campus_code, // Will be replaced by generated code on server
-        celebration_point
-      })
+      const campus = CAMPUS_CODES[code]
+      const data = await api.get(`/api/formation-groups/codes?campus=${encodeURIComponent(campus)}`)
+      setExistingCodes(data.codes || [])
+      setNextNum(data.nextNum || 1)
+      setGroupNumber(String(data.nextNum || 1))
+    } catch { setExistingCodes([]); setNextNum(1); setGroupNumber('1') }
+    finally { setLoadingCodes(false) }
+  }
+
+  useEffect(() => { fetchCodes(campusCode) }, [campusCode])
+
+  const numVal = parseInt(groupNumber, 10)
+  const previewCode = (!isNaN(numVal) && numVal > 0) ? `${campusCode}${String(numVal).padStart(2, '0')}` : `${campusCode}??`
+  const isDuplicate = existingCodes.includes(previewCode)
+
+  const handleSave = async () => {
+    if (isDuplicate) { setError(`${previewCode} already exists — choose a different number`); return }
+    if (isNaN(numVal) || numVal < 1) { setError('Enter a valid group number'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const celebration_point = CAMPUS_CODES[campusCode]
+      await api.post('/api/formation-groups', { celebration_point, group_number: numVal })
       onCreated()
       onClose()
     } catch (err) {
@@ -47,21 +69,66 @@ function CreateGroupModal({ onClose, onCreated }) {
           <span className="modal-title">Create Formation Group</span>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
-        <div className="modal-body">
-          {error && <div className="alert alert-danger" style={{ marginBottom: 16 }}>{error}</div>}
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {error && <div className="alert alert-danger">{error}</div>}
+
           <div className="form-group">
             <label className="form-label">Campus</label>
-            <select className="form-select" value={form.campus_code} onChange={e => setForm(p => ({ ...p, campus_code: e.target.value }))}>
+            <select className="form-select" value={campusCode} onChange={e => setCampusCode(e.target.value)}>
               {Object.entries(CAMPUS_CODES).map(([code, name]) => (
                 <option key={code} value={code}>{code} — {name}</option>
               ))}
             </select>
-            <div className="form-hint">Group code will be auto-generated (e.g. {form.campus_code}01)</div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Group Number</label>
+            <input
+              className="form-input"
+              type="number"
+              min="1"
+              value={groupNumber}
+              onChange={e => setGroupNumber(e.target.value)}
+              style={{ borderColor: isDuplicate ? 'var(--danger)' : undefined }}
+            />
+            {isDuplicate && (
+              <div className="form-hint" style={{ color: 'var(--danger)' }}>{previewCode} is already taken</div>
+            )}
+          </div>
+
+          <div style={{
+            background: 'var(--bg-tertiary)', borderRadius: 12, padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+          }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 2 }}>Group Code Preview</div>
+              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 1, color: isDuplicate ? 'var(--danger)' : 'var(--accent)' }}>{previewCode}</div>
+            </div>
+            {loadingCodes ? (
+              <div className="spinner" style={{ width: 18, height: 18 }} />
+            ) : existingCodes.length > 0 ? (
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Existing codes</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end', maxWidth: 180 }}>
+                  {existingCodes.map(c => (
+                    <span key={c} style={{
+                      fontSize: 11, padding: '2px 7px', borderRadius: 6,
+                      background: c === previewCode ? 'rgba(239,68,68,0.2)' : 'rgba(99,102,241,0.15)',
+                      color: c === previewCode ? 'var(--danger)' : 'var(--text-secondary)',
+                      border: `1px solid ${c === previewCode ? 'rgba(239,68,68,0.4)' : 'rgba(99,102,241,0.3)'}`,
+                      fontWeight: c === previewCode ? 700 : 400
+                    }}>{c}</span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No existing groups</div>
+            )}
           </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving || isDuplicate || isNaN(numVal) || numVal < 1}>
             {saving ? 'Creating…' : 'Create Group'}
           </button>
         </div>

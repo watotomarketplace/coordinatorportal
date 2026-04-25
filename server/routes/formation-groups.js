@@ -33,6 +33,25 @@ async function generateGroupCode(celebrationPoint) {
     return `${prefix}${String(nextNum).padStart(2, '0')}`
 }
 
+// --- GET EXISTING CODES FOR A CAMPUS ---
+// GET /api/formation-groups/codes?campus=Ntinda
+router.get('/codes', requireAuth, async (req, res) => {
+    try {
+        const { campus } = req.query
+        if (!campus) return res.status(400).json({ success: false, message: 'campus query param required' })
+        const prefix = CAMPUS_CODES[campus]
+        if (!prefix) return res.status(400).json({ success: false, message: `Unknown campus: "${campus}"` })
+        const rows = await dbAll('SELECT group_code FROM formation_groups WHERE celebration_point = ? ORDER BY group_code', [campus])
+        const codes = rows.map(r => r.group_code)
+        const nums = codes.map(c => { const m = c.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0 }).filter(n => n > 0)
+        const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1
+        res.json({ success: true, prefix, codes, nextNum })
+    } catch (error) {
+        console.error('GET /formation-groups/codes error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to fetch codes' })
+    }
+})
+
 // --- LIST GROUPS ---
 router.get('/', requireAuth, applyCampusScope, async (req, res) => {
     try {
@@ -136,7 +155,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.post('/', requireGroupManager, async (req, res) => {
     try {
         const user = req.session.user
-        const { celebration_point, cohort, facilitator_user_id, co_facilitator_user_id } = req.body
+        const { celebration_point, cohort, facilitator_user_id, co_facilitator_user_id, group_number } = req.body
         if (!celebration_point) return res.status(400).json({ success: false, message: 'celebration_point required' })
 
         // Campus-scoped roles can only create groups for their own campus
@@ -145,7 +164,19 @@ router.post('/', requireGroupManager, async (req, res) => {
             return res.status(403).json({ success: false, message: `You can only create groups for your campus (${user.celebration_point})` })
         }
 
-        const group_code = await generateGroupCode(celebration_point)
+        let group_code
+        if (group_number != null && group_number !== '') {
+            const prefix = CAMPUS_CODES[celebration_point]
+            if (!prefix) return res.status(400).json({ success: false, message: `Unknown campus: "${celebration_point}"` })
+            const num = parseInt(group_number, 10)
+            if (isNaN(num) || num < 1) return res.status(400).json({ success: false, message: 'group_number must be a positive integer' })
+            group_code = `${prefix}${String(num).padStart(2, '0')}`
+            const duplicate = await dbGet('SELECT id FROM formation_groups WHERE group_code = ?', [group_code])
+            if (duplicate) return res.status(400).json({ success: false, message: `Group code ${group_code} already exists` })
+        } else {
+            group_code = await generateGroupCode(celebration_point)
+        }
+
         const result = await dbRun(
             'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
             [group_code, group_code, celebration_point, facilitator_user_id || null, co_facilitator_user_id || null, cohort || null]

@@ -174,4 +174,46 @@ router.put('/:id/review', requireAuth, async (req, res) => {
     }
 })
 
+// --- EDIT CHECKPOINT SUMMARY / RECOMMENDATIONS ---
+// PUT /api/checkpoints/:id  — Admin or campus-scoped Coordinator
+router.put('/:id', requireAuth, async (req, res) => {
+    try {
+        const user = req.session.user
+        if (!['Admin', 'Coordinator'].includes(user.role)) {
+            return res.status(403).json({ success: false, message: 'Only Admin and Coordinators can edit checkpoints' })
+        }
+
+        const checkpoint = await dbGet(`
+            SELECT dc.*, fg.celebration_point
+            FROM discernment_checkpoints dc
+            JOIN formation_groups fg ON dc.formation_group_id = fg.id
+            WHERE dc.id = ?
+        `, [req.params.id])
+
+        if (!checkpoint) return res.status(404).json({ success: false, message: 'Checkpoint not found' })
+
+        if (user.role === 'Coordinator' && checkpoint.celebration_point !== user.celebration_point) {
+            return res.status(403).json({ success: false, message: 'Access restricted to your campus' })
+        }
+
+        const { summary, recommendations } = req.body
+        if (!summary && !recommendations) {
+            return res.status(400).json({ success: false, message: 'Provide summary and/or recommendations' })
+        }
+
+        await dbRun(`
+            UPDATE discernment_checkpoints
+            SET summary = COALESCE(?, summary),
+                recommendations = COALESCE(?, recommendations),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [summary || null, recommendations || null, req.params.id])
+
+        res.json({ success: true, message: 'Checkpoint updated' })
+    } catch (error) {
+        console.error('Edit checkpoint error:', error)
+        res.status(500).json({ success: false, message: 'Failed to edit checkpoint' })
+    }
+})
+
 export default router

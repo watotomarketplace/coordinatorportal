@@ -8,7 +8,7 @@
  * - Pastoral concern detection — triggers notification when a report has concerns
  * - Graceful degradation when credentials not configured
  */
-import { dbGet, dbAll, dbRun } from '../db/init.js'
+import { dbGet, dbAll, dbRun, IS_POSTGRES } from '../db/init.js'
 import { Client as NotionClient } from '@notionhq/client'
 
 // --- State ---
@@ -431,16 +431,23 @@ export async function syncWeeklyReports() {
     try {
         const notion = new NotionClient({ auth: config.apiKey })
 
-        // Build incremental filter if we have a last sync time
+        // Use DB-persisted last sync time so incremental sync survives restarts
+        const persistedSyncTime = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_last_sync_time'")
+        const lastEditedAfter = lastSyncStatus.lastSyncTime || persistedSyncTime?.value || null
+
+        // Build incremental filter — only fetch pages edited since last sync
         const filter = {}
-        if (lastSyncStatus.lastSyncTime) {
+        if (lastEditedAfter && lastEditedAfter.trim()) {
             filter.filter = {
                 timestamp: 'last_edited_time',
-                last_edited_time: { after: lastSyncStatus.lastSyncTime }
+                last_edited_time: { after: lastEditedAfter }
             }
+            console.log(`📥 [NotionSync] Incremental sync from ${lastEditedAfter}`)
+        } else {
+            console.log(`📥 [NotionSync] Full sync (no cursor)`)
         }
 
-        // Paginated query with retry
+        // Paginated query with retry (page_size 100 to avoid Notion timeouts)
         let allPages = []
         let hasMore = true
         let startCursor = undefined
@@ -474,10 +481,33 @@ export async function syncWeeklyReports() {
         }
         console.log(`📋 [NotionSync] Loaded ${allGroups.length} active group(s) for matching.`)
 
+        const isIncrementalSync = !!(lastEditedAfter && lastEditedAfter.trim())
+
         // Pre-load all existing notion_page_ids — avoids per-row existence check
         const existingRows = await dbAll('SELECT notion_page_id, id FROM weekly_reports WHERE notion_page_id IS NOT NULL')
         const existingByNotionId = {}
         for (const row of existingRows) existingByNotionId[row.notion_page_id] = row.id
+
+        // For incremental sync: pre-load existing week numbers so we don't re-number old reports
+        let existingWeekByPageId = {}   // notion_page_id → week_number currently in DB
+        let groupMaxWeekByNorm = {}     // normalizedCode → max week_number stored in DB
+
+        if (isIncrementalSync) {
+            const weekRows = await dbAll(`
+                SELECT wr.notion_page_id, wr.week_number, fg.group_code
+                FROM weekly_reports wr
+                JOIN formation_groups fg ON wr.formation_group_id = fg.id
+                WHERE wr.notion_page_id IS NOT NULL
+            `)
+            for (const row of weekRows) {
+                existingWeekByPageId[row.notion_page_id] = row.week_number
+                const normCode = normalizeGroupCode(row.group_code)
+                if (!groupMaxWeekByNorm[normCode] || row.week_number > groupMaxWeekByNorm[normCode]) {
+                    groupMaxWeekByNorm[normCode] = row.week_number
+                }
+            }
+            console.log(`📋 [NotionSync] Incremental — found existing week data for ${Object.keys(groupMaxWeekByNorm).length} group(s).`)
+        }
 
         // ─── Map all pages first, splitting multi-group codes ────────
         // e.g. "WNT28&27" becomes two separate report objects — one for WNT28, one for WNT27.
@@ -513,21 +543,35 @@ export async function syncWeeklyReports() {
         }
 
         // ─── Assign week_number by chronological order per group ──
-        // Sorts each group's submissions by session date and numbers them 1, 2, 3...
-        // This is the most accurate week number derivable from Tally form data.
+        // Full sync: sorts all submissions by date and numbers 1, 2, 3…
+        // Incremental sync: preserves existing DB week_numbers for updated pages;
+        //   assigns maxExistingWeek+1, +2… for genuinely new pages.
         const reportsByNormCode = {}
         for (const r of mappedReports) {
             const key = normalizeGroupCode(r.group_code)
             if (!reportsByNormCode[key]) reportsByNormCode[key] = []
             reportsByNormCode[key].push(r)
         }
-        for (const reports of Object.values(reportsByNormCode)) {
+        for (const [normCode, reports] of Object.entries(reportsByNormCode)) {
             reports.sort((a, b) => {
                 const da = new Date(a._session_date || a.submitted_at || 0)
                 const db = new Date(b._session_date || b.submitted_at || 0)
                 return da - db
             })
-            reports.forEach((r, i) => { r.week_number = i + 1 })
+            if (isIncrementalSync) {
+                const maxExisting = groupMaxWeekByNorm[normCode] || 0
+                let newIdx = 0
+                for (const r of reports) {
+                    const storedWeek = existingWeekByPageId[r.notion_page_id]
+                    if (existingByNotionId[r.notion_page_id] && storedWeek != null) {
+                        r.week_number = storedWeek   // preserve DB value for existing pages
+                    } else {
+                        r.week_number = maxExisting + (++newIdx)   // extend from max for new pages
+                    }
+                }
+            } else {
+                reports.forEach((r, i) => { r.week_number = i + 1 })
+            }
         }
 
         let synced = 0
@@ -608,7 +652,7 @@ export async function syncWeeklyReports() {
                 synced++
             } catch (pageErr) {
                 errors++
-                console.error(`❌ [NotionSync] Error processing page ${page.id}:`, pageErr.message)
+                console.error(`❌ [NotionSync] Error processing page ${report.notion_page_id}:`, pageErr.message)
             }
         }
 
@@ -628,6 +672,18 @@ export async function syncWeeklyReports() {
         }
 
         recordHistory({ status: 'success', synced, skipped, errors, pages: allPages.length, duration })
+
+        // Persist sync time to DB so incremental sync survives server restarts
+        try {
+            const syncTimeISO = new Date(syncStart).toISOString()
+            const upsertQ = IS_POSTGRES
+                ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                : "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)"
+            await dbRun(upsertQ, ['notion_last_sync_time', syncTimeISO])
+        } catch (e) {
+            console.warn('[NotionSync] Failed to persist sync time:', e.message)
+        }
+
         console.log(`✅ [NotionSync] ${lastSyncStatus.message}`)
 
         // Notify coordinators about new pastoral concerns (async, non-blocking)
@@ -745,10 +801,23 @@ export async function restartAutoSync() {
 
 export async function getSyncStatus() {
     const config = await getNotionConfig()
+    let latestReportDate = null
+    let reportCount = 0
+    try {
+        const stats = await dbGet(
+            'SELECT MAX(submitted_at) as latest_date, COUNT(*) as total FROM weekly_reports WHERE notion_page_id IS NOT NULL'
+        )
+        latestReportDate = stats?.latest_date || null
+        reportCount = parseInt(stats?.total || 0, 10)
+    } catch (e) {
+        console.warn('[NotionSync] getSyncStatus DB error:', e.message)
+    }
     return {
         ...lastSyncStatus,
         configured: !!config,
         syncIntervalMinutes: config?.syncIntervalMinutes || 15,
-        history: syncHistory.slice(0, 10)  // Last 10 syncs for admin display
+        history: syncHistory.slice(0, 10),
+        latestReportDate,
+        reportCount
     }
 }

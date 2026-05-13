@@ -3,15 +3,15 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { calculateRiskScore } from './risk.js'
-import { dbGet } from '../db/init.js'
+import { dbGet, dbAll, dbRun, IS_POSTGRES } from '../db/init.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const CACHE_FILE = path.join(__dirname, '../db/cache.json')
 
+// In-memory layer on top of the DB for fast lookups
 let cache = {
-    data: null,
-    unenrolled: [],
+    data: null,      // full student array (loaded from DB on boot)
     timestamp: 0,
     lastSyncAttempt: 0,
     lastSyncSuccess: 0,
@@ -136,28 +136,61 @@ export function getChartData(students) {
     }
 }
 
-export async function getPaginatedUsers({ page = 1, limit = 50, search = '', celebrationPoint = '', risk = '' }) {
-    if (!cache.data) loadCache()
-    let data = [...(cache.data || [])]
+export async function getPaginatedUsers({ page = 1, limit = 50, search = '', celebrationPoint = '', risk = '', sort = 'name', order = 'asc' }) {
+    // Try DB-backed server-side query first (supports large datasets without loading all into memory)
+    try {
+        let conditions = []
+        let params = []
+        if (celebrationPoint) { conditions.push('celebration_point = ?'); params.push(celebrationPoint) }
+        if (risk) { conditions.push('risk_category = ?'); params.push(risk) }
+        if (search) {
+            conditions.push('(name LIKE ? OR email LIKE ?)')
+            params.push(`%${search}%`, `%${search}%`)
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+        const safeSortFields = { name: 'name', progress: 'progress', risk_score: 'risk_score', email: 'email' }
+        const sortCol = safeSortFields[sort] || 'name'
+        const sortDir = order === 'desc' ? 'DESC' : 'ASC'
+        const offset = (page - 1) * limit
 
+        const countRow = await dbGet(`SELECT COUNT(*) as n FROM thinkific_students ${where}`, params)
+        const total = parseInt(countRow?.n || 0, 10)
+        const rows = await dbAll(`SELECT * FROM thinkific_students ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`, [...params, limit, offset])
+
+        if (total > 0) {
+            const users = rows.map(row => {
+                const risk2 = calculateRiskScore(
+                    { last_sign_in_at: row.last_sign_in_at },
+                    { percentage_completed: (row.progress || 0) / 100, updated_at: row.enrollment_updated_at }
+                )
+                return {
+                    id: row.student_id, userId: row.thinkific_user_id,
+                    name: row.name, email: row.email,
+                    celebration_point: row.celebration_point,
+                    progress: row.progress || 0,
+                    status: row.enrollment_status,
+                    risk: risk2, risk_category: row.risk_category
+                }
+            })
+            return { success: true, users, meta: { total, totalPages: Math.ceil(total / limit), currentPage: Number(page), limit: Number(limit) }, lastUpdated: cache.timestamp }
+        }
+    } catch (e) {
+        console.warn('[thinkific] DB pagination failed, falling back to memory:', e.message)
+    }
+
+    // Fall back to in-memory
+    if (!cache.data) loadCacheFromFile()
+    let data = [...(cache.data || [])]
     if (celebrationPoint) data = data.filter(u => u.celebration_point === celebrationPoint)
     if (search) {
         const q = search.toLowerCase()
         data = data.filter(u => (u.name && u.name.toLowerCase().includes(q)) || (u.email && u.email.toLowerCase().includes(q)))
     }
     if (risk) data = data.filter(u => u.risk_category === risk)
-
     const total = data.length
-    const totalPages = Math.ceil(total / limit)
     const offset = (page - 1) * limit
     const users = data.slice(offset, offset + limit)
-
-    return {
-        success: true,
-        users,
-        meta: { total, totalPages, currentPage: Number(page), limit: Number(limit) },
-        lastUpdated: cache.timestamp
-    }
+    return { success: true, users, meta: { total, totalPages: Math.ceil(total / limit), currentPage: Number(page), limit: Number(limit) }, lastUpdated: cache.timestamp }
 }
 
 export function getStudentById(id) {
@@ -165,17 +198,54 @@ export function getStudentById(id) {
     return (cache.data || []).find(s => String(s.id) === String(id) || String(s.userId) === String(id))
 }
 
-function loadCache() {
+async function loadCacheFromDB() {
+    try {
+        const rows = await dbAll('SELECT * FROM thinkific_students')
+        if (rows && rows.length > 0) {
+            cache.data = rows.map(row => {
+                let raw = {}
+                try { raw = JSON.parse(row.raw_data || '{}') } catch (_) {}
+                const risk = calculateRiskScore(
+                    { last_sign_in_at: row.last_sign_in_at, ...raw.user },
+                    { percentage_completed: (row.progress || 0) / 100, updated_at: row.enrollment_updated_at, ...raw.enrollment }
+                )
+                return {
+                    id: row.student_id,
+                    userId: row.thinkific_user_id,
+                    name: row.name,
+                    email: row.email,
+                    celebration_point: row.celebration_point,
+                    progress: row.progress || 0,
+                    status: row.enrollment_status,
+                    lastActivity: row.last_sign_in_at,
+                    joinedAt: row.enrollment_updated_at,
+                    risk,
+                    risk_category: row.risk_category || risk.category
+                }
+            })
+            cache.timestamp = Date.now()
+            console.log(`✅ Loaded ${cache.data.length} students from DB`)
+            return true
+        }
+    } catch (e) { console.error('DB cache load failed:', e.message) }
+    return false
+}
+
+function loadCacheFromFile() {
     try {
         if (fs.existsSync(CACHE_FILE)) {
             const saved = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
             if (saved.data) {
-                cache = { ...saved, duration: cache.duration }
+                cache = { ...cache, ...saved, duration: cache.duration }
                 return true
             }
         }
-    } catch (e) { console.error('Cache load failed:', e.message) }
+    } catch (e) { console.error('File cache load failed:', e.message) }
     return false
+}
+
+function loadCache() {
+    return loadCacheFromFile()
 }
 
 function saveCache() {
@@ -190,13 +260,35 @@ function triggerRefresh() {
     doRefresh().catch(() => {})
 }
 
+async function upsertStudent(student) {
+    const upsertSql = IS_POSTGRES
+        ? `INSERT INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+           ON CONFLICT(student_id) DO UPDATE SET
+             thinkific_user_id=EXCLUDED.thinkific_user_id, name=EXCLUDED.name, email=EXCLUDED.email,
+             celebration_point=EXCLUDED.celebration_point, progress=EXCLUDED.progress,
+             risk_score=EXCLUDED.risk_score, risk_category=EXCLUDED.risk_category,
+             last_sign_in_at=EXCLUDED.last_sign_in_at, enrollment_updated_at=EXCLUDED.enrollment_updated_at,
+             enrollment_status=EXCLUDED.enrollment_status, raw_data=EXCLUDED.raw_data, updated_at=NOW()`
+        : `INSERT OR REPLACE INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`
+
+    await dbRun(upsertSql, [
+        String(student.id), String(student.userId), student.name, student.email,
+        student.celebration_point, student.progress, student.risk.score, student.risk.category,
+        student.lastActivity || null, student.joinedAt || null, student.status || null,
+        JSON.stringify({ user: student._rawUser, enrollment: student._rawEnrollment })
+    ])
+}
+
 async function doRefresh() {
     if (refreshPromise) return refreshPromise
     refreshPromise = (async () => {
         try {
             const client = await createClient()
             console.log('🔄 Syncing Thinkific students...')
-            
+            cache.lastSyncAttempt = Date.now()
+
             let users = []
             let page = 1
             while (page <= 100) {
@@ -204,7 +296,7 @@ async function doRefresh() {
                 users.push(...(res.data.items || []))
                 if (page >= res.data.meta.pagination.total_pages) break
                 page++
-                await new Promise(r => setTimeout(r, 1000))
+                await new Promise(r => setTimeout(r, 500))
             }
 
             let enrollments = []
@@ -214,7 +306,7 @@ async function doRefresh() {
                 enrollments.push(...(res.data.items || []))
                 if (page >= res.data.meta.pagination.total_pages) break
                 page++
-                await new Promise(r => setTimeout(r, 1000))
+                await new Promise(r => setTimeout(r, 500))
             }
 
             const userMap = new Map(users.map(u => [u.id, u]))
@@ -229,14 +321,22 @@ async function doRefresh() {
                     progress: Math.round((e.percentage_completed || 0) * 100),
                     status: e.status,
                     lastActivity: e.last_engagement_at || u.last_sign_in_at,
-                    joinedAt: e.created_at
+                    joinedAt: e.created_at,
+                    _rawUser: u,
+                    _rawEnrollment: e
                 }
-                student.risk = calculateRiskScore(u, e) // Updated to pass both objects as risk.js expects
+                student.risk = calculateRiskScore(u, e)
                 student.risk_category = student.risk.category
                 return student
             })
 
-            cache.data = processed
+            // Persist to DB
+            for (const student of processed) {
+                try { await upsertStudent(student) } catch (e) { console.warn('Upsert error:', e.message) }
+            }
+
+            // Strip internal raw fields for in-memory
+            cache.data = processed.map(({ _rawUser, _rawEnrollment, ...s }) => s)
             cache.timestamp = Date.now()
             cache.lastSyncSuccess = Date.now()
             saveCache()
@@ -258,7 +358,9 @@ export function getStudentProgress(id) {
 }
 
 export async function preWarmCache() {
-    loadCache()
+    // Priority: DB → file cache → background refresh
+    const fromDB = await loadCacheFromDB()
+    if (!fromDB) loadCacheFromFile()
     if (!cache.data || cache.data.length === 0 || (Date.now() - cache.timestamp > cache.duration)) {
         triggerRefresh()
     }

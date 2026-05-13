@@ -9,7 +9,22 @@ import {
 } from 'lucide-react'
 import { CELEBRATION_POINTS } from '../constants/campuses'
 
-const ROLES = ['Admin', 'LeadershipTeam', 'Coordinator', 'Facilitator', 'Pastor', 'TechSupport', 'Student']
+const ALL_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
+const ROLES = ALL_ROLES  // alias kept for sidebar/filter usage
+
+function getAllowedRolesForActor(actor) {
+  if (!actor) return []
+  const role = actor.role
+  if (role === 'Admin') return ALL_ROLES
+  if (role === 'Pastor') return ['Coordinator', 'Facilitator', 'CoFacilitator']
+  if (['TechSupport', 'Coordinator'].includes(role)) return ['Facilitator', 'CoFacilitator']
+  return []
+}
+
+function canActorManageUsers(actor) {
+  if (!actor) return false
+  return ['Admin', 'TechSupport', 'Coordinator', 'Pastor'].includes(actor.role)
+}
 
 function UserAvatar({ u }) {
   const initials = ((u.name || u.username || '?')[0] || '').toUpperCase()
@@ -31,14 +46,22 @@ function RoleBadge({ role, isSecondary }) {
 }
 
 function UserModal({ onClose, onSaved, userToEdit = null }) {
-  const [form, setForm] = useState({ 
-    username: userToEdit?.username || '', 
-    name: userToEdit?.name || '', 
-    password: '', 
-    role: userToEdit?.role || 'Facilitator', 
-    celebration_point: userToEdit?.celebration_point || '', 
-    secondary_roles: (typeof userToEdit?.secondary_roles === 'string' 
-      ? JSON.parse(userToEdit?.secondary_roles || '[]') 
+  const currentUser = useAuthStore(s => s.user)
+  const allowedRoles = getAllowedRolesForActor(currentUser)
+  const isAdmin = currentUser?.role === 'Admin'
+  const defaultCampus = isAdmin
+    ? (userToEdit?.celebration_point || '')
+    : (currentUser?.celebration_point || '')
+  const defaultRole = userToEdit?.role || allowedRoles[allowedRoles.length - 1] || 'Facilitator'
+
+  const [form, setForm] = useState({
+    username: userToEdit?.username || '',
+    name: userToEdit?.name || '',
+    password: '',
+    role: defaultRole,
+    celebration_point: defaultCampus,
+    secondary_roles: (typeof userToEdit?.secondary_roles === 'string'
+      ? JSON.parse(userToEdit?.secondary_roles || '[]')
       : userToEdit?.secondary_roles) || [],
     assigned_groups: (typeof userToEdit?.assigned_groups === 'string'
       ? JSON.parse(userToEdit?.assigned_groups || '[]')
@@ -64,6 +87,7 @@ function UserModal({ onClose, onSaved, userToEdit = null }) {
         ...form,
         username: form.username.trim().toLowerCase(),
         secondary_roles: form.secondary_roles,
+        celebration_point: isAdmin ? form.celebration_point : (currentUser?.celebration_point || ''),
       }
       if (userToEdit) {
         if (!payload.password) delete payload.password
@@ -123,24 +147,33 @@ function UserModal({ onClose, onSaved, userToEdit = null }) {
           <div className="form-group">
             <label className="form-label">Primary Role</label>
             <select className="form-select" value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))}>
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              {allowedRoles.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
           <div className="form-group">
             <label className="form-label">Celebration Point (Campus)</label>
-            <select
-              className="form-select"
-              value={form.celebration_point}
-              onChange={e => setForm(p => ({ ...p, celebration_point: e.target.value }))}
-            >
-              <option value="">— Select Campus —</option>
-              {CELEBRATION_POINTS.map(cp => <option key={cp} value={cp}>{cp}</option>)}
-            </select>
+            {isAdmin ? (
+              <select
+                className="form-select"
+                value={form.celebration_point}
+                onChange={e => setForm(p => ({ ...p, celebration_point: e.target.value }))}
+              >
+                <option value="">— Select Campus —</option>
+                {CELEBRATION_POINTS.map(cp => <option key={cp} value={cp}>{cp}</option>)}
+              </select>
+            ) : (
+              <input
+                className="form-input"
+                value={currentUser?.celebration_point || ''}
+                disabled
+                style={{ opacity: 0.6 }}
+              />
+            )}
           </div>
           <div className="form-group">
             <label className="form-label">Secondary Roles</label>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {ROLES.filter(r => r !== form.role && r !== 'Admin').map(r => (
+              {allowedRoles.filter(r => r !== form.role && r !== 'Admin').map(r => (
                 <button
                   key={r}
                   className={`btn btn-sm ${form.secondary_roles.includes(r) ? 'btn-primary' : 'btn-secondary'}`}
@@ -182,6 +215,8 @@ export default function UserManagement() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
   const platform = useAppStore(s => s.platform)
   const hasRole = useAuthStore(s => s.hasRole)
+  const currentUser = useAuthStore(s => s.user)
+  const canManage = canActorManageUsers(currentUser)
 
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -263,7 +298,7 @@ export default function UserManagement() {
               <div style={{ display: 'flex', gap: 4 }}>
                 <button className={`btn btn-ghost btn-icon btn-sm ${viewMode === 'list' ? '' : ''}`} onClick={() => setViewMode('list')} title="List"><List size={16} /></button>
                 <button className={`btn btn-ghost btn-icon btn-sm`} onClick={() => setViewMode('grid')} title="Grid"><Grid3X3 size={16} /></button>
-                {hasRole('Admin') && (
+                {canManage && (
                   <button className="btn btn-primary btn-sm" onClick={() => { setEditingUser(null); setShowModal(true); }}><Plus size={14} /> Add</button>
                 )}
               </div>
@@ -317,7 +352,7 @@ export default function UserManagement() {
                 <div className="detail-field"><span className="detail-field-label">Last Login</span><span className="detail-field-value">{selectedUser.last_login ? new Date(selectedUser.last_login).toLocaleDateString() : 'Never'}</span></div>
               </div>
 
-              {hasRole('Admin') && (
+              {canManage && (
                 <div className="action-btns">
                   <button className="action-btn" onClick={() => { setEditingUser(selectedUser); setShowModal(true); }}><Edit size={20} /><span>Edit</span></button>
                   <button className="action-btn" onClick={() => handleDelete(selectedUser.id)} style={{ color: 'var(--danger)' }}><Trash2 size={20} /><span>Delete</span></button>
@@ -369,7 +404,7 @@ export default function UserManagement() {
         ))}
       </div>
 
-      {hasRole('Admin') && (
+      {canManage && (
         <button className="fab" onClick={() => { setEditingUser(null); setShowModal(true); }}>
           <Plus size={24} />
         </button>

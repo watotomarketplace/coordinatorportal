@@ -35,6 +35,19 @@ function userHasAnyRole(user, roleList) {
     return userRoles(user).some(r => roleList.includes(r))
 }
 
+// Returns the roles an actor may assign when creating or editing users.
+function getAllowedTargetRoles(actor) {
+    const roles = userRoles(actor)
+    if (roles.includes('Admin')) return ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
+    if (roles.includes('Pastor')) return ['Coordinator', 'Facilitator', 'CoFacilitator']
+    if (roles.some(r => ['TechSupport', 'Coordinator'].includes(r))) return ['Facilitator', 'CoFacilitator']
+    return []
+}
+
+function canManageUser(actor, targetRole) {
+    return getAllowedTargetRoles(actor).includes(targetRole)
+}
+
 // --- Middleware ---
 function requireAuth(req, res, next) {
     if (!req.session.user) {
@@ -119,6 +132,8 @@ export {
     userRoles,
     userHasRole,
     userHasAnyRole,
+    getAllowedTargetRoles,
+    canManageUser,
     requireAuth,
     requireAdmin,
     requireAdminOrLeadership,

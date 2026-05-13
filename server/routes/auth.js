@@ -1,6 +1,7 @@
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import { dbGet, dbAll, dbRun, saveDatabase } from '../db/init.js'
+import { sendPasswordResetEmail } from '../services/email.js'
 
 const router = express.Router()
 
@@ -44,7 +45,8 @@ router.post('/login', async (req, res) => {
 
         res.json({
             success: true,
-            user: req.session.user
+            user: req.session.user,
+            password_reset_required: user.password_reset_required === 1 || user.password_reset_required === true
         })
     } catch (error) {
         console.error('Login error:', error)
@@ -109,6 +111,55 @@ router.put('/profile', async (req, res) => {
     } catch (error) {
         console.error('Update profile error:', error)
         res.json({ success: false, message: 'Failed to update profile' })
+    }
+})
+
+// Reset password via token (from tech-support issued reset link)
+router.post('/reset-password', async (req, res) => {
+    try {
+        const { token, new_password } = req.body
+        if (!token || !new_password || new_password.length < 6) {
+            return res.status(400).json({ success: false, message: 'Valid token and new password (min 6 chars) required' })
+        }
+
+        const tokenRow = await dbGet(
+            "SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0",
+            [token]
+        )
+        if (!tokenRow) {
+            return res.status(400).json({ success: false, message: 'Invalid or already used reset link' })
+        }
+        if (new Date(tokenRow.expires_at) < new Date()) {
+            return res.status(400).json({ success: false, message: 'Reset link has expired. Please request a new one.' })
+        }
+
+        const hashed = bcrypt.hashSync(new_password, 10)
+        await dbRun(
+            "UPDATE users SET password = ?, password_reset_required = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [hashed, tokenRow.user_id]
+        )
+        await dbRun("UPDATE password_reset_tokens SET used = 1 WHERE id = ?", [tokenRow.id])
+
+        res.json({ success: true, message: 'Password updated successfully. You can now log in.' })
+    } catch (error) {
+        console.error('Reset password error:', error)
+        res.status(500).json({ success: false, message: 'Failed to reset password' })
+    }
+})
+
+// Check if a reset token is valid (for the reset-password page)
+router.get('/reset-password/:token', async (req, res) => {
+    try {
+        const tokenRow = await dbGet(
+            "SELECT prt.*, u.username, u.name FROM password_reset_tokens prt JOIN users u ON prt.user_id = u.id WHERE prt.token = ? AND prt.used = 0",
+            [req.params.token]
+        )
+        if (!tokenRow || new Date(tokenRow.expires_at) < new Date()) {
+            return res.status(400).json({ success: false, message: 'Invalid or expired reset link' })
+        }
+        res.json({ success: true, username: tokenRow.username, name: tokenRow.name })
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to validate token' })
     }
 })
 

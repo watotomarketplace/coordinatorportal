@@ -1,7 +1,10 @@
 import express from 'express'
+import crypto from 'crypto'
+import bcrypt from 'bcryptjs'
 import { requireAuth, requireAdminOrTechSupport } from '../middleware/rbac.js'
 import { updateUserName, resetUserPassword, getThinkificUser } from '../services/thinkific-writeback.js'
-import { dbAll } from '../db/init.js'
+import { dbAll, dbGet, dbRun, IS_POSTGRES } from '../db/init.js'
+import { sendPasswordResetEmail } from '../services/email.js'
 
 const router = express.Router()
 
@@ -80,6 +83,65 @@ router.post('/reset-password/:thinkificId', requireAuth, requireAdminOrTechSuppo
             error: error.message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         })
+    }
+})
+
+// --- PORTAL USER PASSWORD RESET (token-based) ---
+router.put('/portal-users/:id/reset-password', requireAuth, requireAdminOrTechSupport, async (req, res) => {
+    try {
+        const actor = req.session.user
+        const { id } = req.params
+
+        const target = await dbGet('SELECT id, username, name, email, celebration_point FROM users WHERE id = ? AND active = 1', [id])
+        if (!target) return res.status(404).json({ success: false, message: 'User not found' })
+
+        // TechSupport can only reset users at their own campus
+        if (actor.role === 'TechSupport' && target.celebration_point !== actor.celebration_point) {
+            return res.status(403).json({ success: false, message: 'You can only reset passwords for users at your campus' })
+        }
+
+        // Generate a random token (32 bytes = 64 hex chars)
+        const token = crypto.randomBytes(32).toString('hex')
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour
+
+        // Set password to an unusable random hash
+        const unusableHash = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10)
+        await dbRun(
+            "UPDATE users SET password = ?, password_reset_required = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [unusableHash, id]
+        )
+
+        // Store token in DB
+        const insertTokenQ = IS_POSTGRES
+            ? "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"
+            : "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)"
+        await dbRun(insertTokenQ, [id, token, expiresAt])
+
+        const portalUrl = process.env.PORTAL_URL || `http://localhost:${process.env.PORT || 3000}`
+        const resetLink = `${portalUrl}/reset-password?token=${token}`
+
+        // Send email if user has an email address
+        if (target.email) {
+            sendPasswordResetEmail({ email: target.email, name: target.name, username: target.username, resetLink })
+                .catch(err => console.warn('[TechSupport] Failed to send reset email:', err.message))
+        }
+
+        // Audit log
+        await dbRun(
+            "INSERT INTO audit_logs (user_id, action, details, action_type) VALUES (?, ?, ?, ?)",
+            [actor.id, `portal_password_reset`, `Reset password for user ${target.username} (id=${id})`, 'UPDATE']
+        ).catch(() => {})
+
+        res.json({
+            success: true,
+            message: `Password reset link generated for ${target.name}`,
+            resetLink,
+            expiresAt,
+            emailSent: !!target.email
+        })
+    } catch (error) {
+        console.error('Portal password reset error:', error)
+        res.status(500).json({ success: false, message: 'Failed to reset password' })
     }
 })
 

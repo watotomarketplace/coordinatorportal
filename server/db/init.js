@@ -436,6 +436,98 @@ async function runMigrations() {
     console.error('⚠️ Campus normalization migration failed:', e.message)
   }
 
+  // ─── Enhancement v1.0 Migrations ─────────────────────────────────────────
+
+  // thinkific_students — persistent student table (replaces volatile cache-only)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS thinkific_students (
+      student_id TEXT PRIMARY KEY,
+      thinkific_user_id TEXT,
+      name TEXT,
+      email TEXT,
+      celebration_point TEXT,
+      progress INTEGER DEFAULT 0,
+      risk_score INTEGER DEFAULT 0,
+      risk_category TEXT DEFAULT 'Healthy',
+      last_sign_in_at TEXT,
+      enrollment_updated_at TEXT,
+      enrollment_status TEXT,
+      raw_data TEXT,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_ts_campus ON thinkific_students(celebration_point)') } catch (_) {}
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_ts_risk ON thinkific_students(risk_category)') } catch (_) {}
+
+  // user_secondary_roles join table — replaces users.secondary_roles JSON column
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS user_secondary_roles (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      UNIQUE(user_id, role)
+    )
+  `)
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_usr_user ON user_secondary_roles(user_id)') } catch (_) {}
+
+  // password_reset_tokens — for token-based forced password changes
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id ${getPK()},
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token TEXT UNIQUE NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token)') } catch (_) {}
+
+  // users — new columns for enhancement
+  try { await dbRun("ALTER TABLE users ADD COLUMN email TEXT") } catch (_) {}
+  try { await dbRun("ALTER TABLE users ADD COLUMN password_reset_required INTEGER DEFAULT 0") } catch (_) {}
+
+  // audit_logs — add action_type column
+  try { await dbRun("ALTER TABLE audit_logs ADD COLUMN action_type TEXT DEFAULT 'OTHER'") } catch (_) {}
+  try { await dbRun("ALTER TABLE audit_logs ADD COLUMN ip_address TEXT") } catch (_) {}
+
+  // system_settings — seed new keys
+  try {
+    const insertOrIgnore = IS_POSTGRES
+      ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING"
+      : "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)"
+    await dbRun(insertOrIgnore, ['cohort_start_date', ''])
+    await dbRun(insertOrIgnore, ['notion_last_sync_cursor', ''])
+    await dbRun(insertOrIgnore, ['notion_last_sync_time', ''])
+  } catch (_) {}
+
+  // Migrate existing secondary_roles JSON → user_secondary_roles join table (idempotent)
+  try {
+    const usersWithRoles = await dbAll("SELECT id, secondary_roles FROM users WHERE secondary_roles IS NOT NULL AND secondary_roles != '[]' AND secondary_roles != ''")
+    for (const u of usersWithRoles) {
+      try {
+        const roles = JSON.parse(u.secondary_roles || '[]')
+        for (const role of roles) {
+          if (role) {
+            const upsert = IS_POSTGRES
+              ? 'INSERT INTO user_secondary_roles (user_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING'
+              : 'INSERT OR IGNORE INTO user_secondary_roles (user_id, role) VALUES (?, ?)'
+            await dbRun(upsert, [u.id, role])
+          }
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  // weekly_reports — add synced_from_notion flag for manual entries
+  try { await dbRun("ALTER TABLE weekly_reports ADD COLUMN synced_from_notion INTEGER DEFAULT 1") } catch (_) {}
+  try { await dbRun("ALTER TABLE weekly_reports ADD COLUMN summary TEXT") } catch (_) {}
+  try { await dbRun("ALTER TABLE weekly_reports ADD COLUMN highlights TEXT") } catch (_) {}
+  try { await dbRun("ALTER TABLE weekly_reports ADD COLUMN prayer_requests TEXT") } catch (_) {}
+
+  // discernment_checkpoints — add editable fields
+  try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN recommendations TEXT") } catch (_) {}
+  try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN updated_at TEXT") } catch (_) {}
+
   console.log('✅ Database schemas verified/initialized')
 
   await seedFormationGroups()
@@ -713,6 +805,23 @@ export function saveDatabase() {
     const buffer = Buffer.from(data)
     writeFileSync(dbPath, buffer)
   }
+}
+
+// Returns current program week (1–13). Uses cohort_start_date if set, else manual current_week.
+export async function getCurrentWeek() {
+  try {
+    const startRow = await dbGet("SELECT value FROM system_settings WHERE key = 'cohort_start_date'")
+    if (startRow?.value && startRow.value.trim()) {
+      const start = new Date(startRow.value)
+      if (!isNaN(start.getTime())) {
+        const diffMs = Date.now() - start.getTime()
+        const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1
+        return Math.min(13, Math.max(1, week))
+      }
+    }
+    const manualRow = await dbGet("SELECT value FROM system_settings WHERE key = 'current_week'")
+    return parseInt(manualRow?.value || '1', 10)
+  } catch { return 1 }
 }
 
 function pgConvert(sql) {

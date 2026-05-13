@@ -5,6 +5,7 @@ import { readdirSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { requireAdminOrLeadership } from '../middleware/rbac.js'
+import { logAudit } from '../services/audit.js'
 import { sendLoginEmail, isEmailConfigured } from '../services/email.js'
 import { CELEBRATION_POINTS } from '../constants/campuses.js'
 
@@ -183,6 +184,13 @@ router.post('/users', requireUserManager, async (req, res) => {
             [username, hashedPassword, name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, selectedImage || null]
         )
         const userId = result.lastInsertRowid
+
+        if (!curIsAdmin) {
+            logAudit(
+                currentUser.name || currentUser.username, currentUser.role, 'create_user',
+                `Created '${username}' with role(s) ${rolesString} at ${finalCelebrationPoint || 'global'}`
+            ).catch(console.warn)
+        }
 
         // Handle assigned groups for facilitators
         if (Array.isArray(req.body.assigned_groups) && req.body.assigned_groups.length > 0) {
@@ -415,6 +423,13 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
                 'UPDATE users SET name = ?, role = ?, roles = ?, secondary_roles = ?, celebration_point = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
                 [name, primaryRole, rolesString, JSON.stringify(secondaryRoles), finalCelebrationPoint, id]
             )
+        }
+
+        if (!curIsAdmin) {
+            logAudit(
+                currentUser.name || currentUser.username, currentUser.role, 'update_user',
+                `Updated user ID ${id}: role(s)=${rolesString}, campus=${finalCelebrationPoint || 'global'}`
+            ).catch(console.warn)
         }
 
         // Handle assigned groups for facilitators

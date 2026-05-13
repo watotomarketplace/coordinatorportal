@@ -5,6 +5,8 @@ import cors from 'cors'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import authRoutes from './routes/auth.js'
 import dataRoutes from './routes/data.js'
 import adminRoutes from './routes/admin.js'
@@ -39,10 +41,32 @@ const __dirname = dirname(__filename)
 const app = express()
 const PORT = process.env.PORT || 3000
 
-    // Initialize database, then start services that depend on it
+// ── Security headers (Helmet) ─────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false, // CSP is managed per-page; disable global to avoid blocking CDN fonts
+  crossOriginEmbedderPolicy: false
+}))
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later.' }
+})
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many login attempts, please try again in 15 minutes.' }
+})
+
+// Initialize database, then start services that depend on it
 await initDatabase()
 
-// Pre-warm Thinkific cache — loads disk cache instantly, refreshes in background if stale
+// Pre-warm Thinkific cache — loads from DB instantly, refreshes in background if stale
 await preWarmCache()
 console.log(`[Thinkific] Cache contains ${getCacheStatus().cacheSize} students`);
 
@@ -69,19 +93,38 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
 app.set('trust proxy', 1) // Trust Render's reverse proxy for secure cookies
 
+// ── Session store: Redis if configured, otherwise in-memory (dev) ────────────
+let sessionStore
+if (process.env.REDIS_URL) {
+  try {
+    const { default: IORedis } = await import('ioredis')
+    const { RedisStore } = await import('connect-redis')
+    const redisClient = new IORedis(process.env.REDIS_URL, { lazyConnect: false, maxRetriesPerRequest: 3 })
+    redisClient.on('error', e => console.error('[Redis] Session store error:', e.message))
+    sessionStore = new RedisStore({ client: redisClient, prefix: 'wl101:sess:' })
+    console.log('✅ Redis session store active')
+  } catch (e) {
+    console.warn('⚠️ Redis session store failed, falling back to memory store:', e.message)
+  }
+} else {
+  console.log('ℹ️  No REDIS_URL — using in-memory session store (dev only)')
+}
+
 app.use(session({
     secret: process.env.SESSION_SECRET || 'watoto-dashboard-secret-change-me',
     resave: false,
     saveUninitialized: false,
+    store: sessionStore,
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
+        sameSite: 'lax',
         maxAge: (parseInt(process.env.SESSION_TIMEOUT_MINUTES) || 60) * 60 * 1000
     }
 }))
 
 // API Routes
-app.use('/api/auth', authRoutes)
+app.use('/api/auth', loginLimiter, authRoutes)
 app.use('/api/data', dataRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/thinkific', thinkificRoutes)

@@ -32,8 +32,19 @@ export default function WeeklyReports() {
   const [campusFilter, setCampusFilter] = useState('All')
   const [expandedReportId, setExpandedReportId] = useState(null)
   const [syncing, setSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState(null)
+
+  const canSync = hasRole('Admin') || hasRole('TechSupport')
 
   useEffect(() => { setPageTitle('Weekly Reports') }, [setPageTitle])
+
+  const loadSyncStatus = async () => {
+    if (!canSync) return
+    try {
+      const data = await api.get('/api/reports/sync-status')
+      if (data.success !== false) setSyncStatus(data)
+    } catch {}
+  }
 
   const loadReports = async () => {
     try {
@@ -47,14 +58,18 @@ export default function WeeklyReports() {
     }
   }
 
-  useEffect(() => { loadReports() }, [])
+  useEffect(() => { loadReports(); loadSyncStatus() }, [])
 
-  const handleSync = async () => {
-    if (!confirm('Trigger manual sync with Notion? This may take a moment.')) return
+  const handleSync = async (full = false) => {
+    const msg = full
+      ? 'Force a full re-sync? This clears the incremental cursor and re-fetches all Notion pages. May take longer.'
+      : 'Trigger manual sync with Notion? This may take a moment.'
+    if (!confirm(msg)) return
     setSyncing(true)
     try {
-      await api.post('/api/reports/sync')
-      await loadReports()
+      const url = full ? '/api/reports/sync?full=true' : '/api/reports/sync'
+      await api.post(url)
+      await Promise.all([loadReports(), loadSyncStatus()])
     } catch (err) {
       console.error('Sync failed:', err)
       alert('Sync failed. Check server logs.')
@@ -74,17 +89,39 @@ export default function WeeklyReports() {
         <div>
           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 4, letterSpacing: '-0.5px' }}>📝 Weekly Reports</h2>
           <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Centralized oversight of campus-level formation metrics</p>
+          {syncStatus && (
+            <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 11, color: 'var(--text-tertiary)', flexWrap: 'wrap' }}>
+              <span>Last sync: {syncStatus.lastSyncTime ? new Date(syncStatus.lastSyncTime).toLocaleString() : 'Never'}</span>
+              {syncStatus.latestReportDate && (
+                <span>Latest report: {new Date(syncStatus.latestReportDate).toLocaleDateString()}</span>
+              )}
+              <span>{syncStatus.reportCount || 0} Notion reports in DB</span>
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
-          {hasRole('Admin') && (
-            <button 
-              className={`btn ${syncing ? 'btn-ghost' : 'btn-secondary'}`} 
-              onClick={handleSync} 
-              disabled={syncing}
-              style={{ fontSize: 13 }}
-            >
-              <Clock size={16} className={syncing ? 'spin' : ''} /> {syncing ? 'Syncing...' : 'Sync Notion'}
-            </button>
+          {canSync && (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                className={`btn ${syncing ? 'btn-ghost' : 'btn-secondary'}`}
+                onClick={() => handleSync(false)}
+                disabled={syncing}
+                style={{ fontSize: 13 }}
+              >
+                <Clock size={16} className={syncing ? 'spin' : ''} /> {syncing ? 'Syncing…' : 'Sync Notion'}
+              </button>
+              {hasRole('Admin') && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => handleSync(true)}
+                  disabled={syncing}
+                  style={{ fontSize: 12 }}
+                  title="Clear incremental cursor and re-fetch all Notion pages"
+                >
+                  Full Re-sync
+                </button>
+              )}
+            </div>
           )}
           {(hasRole('Admin') || hasRole('LeadershipTeam') || hasRole('Coordinator')) && (
             <>

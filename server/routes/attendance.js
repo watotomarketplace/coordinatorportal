@@ -425,4 +425,109 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     }
 })
 
+// 8. Attendance comparison for a group/week: coordinator-recorded vs facilitator-reported
+// GET /api/attendance/group/:groupId/comparison/:week
+router.get('/group/:groupId/comparison/:week', requireAuth, async (req, res) => {
+    try {
+        const { groupId, week } = req.params
+        const weekNum = parseInt(week, 10)
+
+        const group = await dbGet('SELECT * FROM formation_groups WHERE id = ?', [groupId])
+        if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
+
+        // Get coordinator-recorded attendance from group_sessions + session_attendance
+        const session = await dbGet(
+            'SELECT id, week_number, session_date, did_not_meet FROM group_sessions WHERE formation_group_id = ? AND week_number = ? LIMIT 1',
+            [groupId, weekNum]
+        )
+
+        let coordinatorAttended = null
+        let coordinatorTotal = null
+        let coordinatorPct = null
+
+        if (session && !session.did_not_meet) {
+            const attRow = await dbGet(`
+                SELECT COUNT(*) as total,
+                    SUM(CASE WHEN sa.attended = 1 THEN 1 ELSE 0 END) as attended
+                FROM session_attendance sa WHERE sa.session_id = ?
+            `, [session.id])
+            coordinatorTotal = attRow?.total || 0
+            coordinatorAttended = attRow?.attended || 0
+            coordinatorPct = coordinatorTotal > 0 ? Math.round((coordinatorAttended / coordinatorTotal) * 100) : null
+        }
+
+        // Get facilitator-reported attendance from weekly_reports
+        const report = await dbGet(
+            'SELECT attendance_count, engagement_level, submitted_at FROM weekly_reports WHERE formation_group_id = ? AND week_number = ? LIMIT 1',
+            [groupId, weekNum]
+        )
+
+        const memberCount = (await dbGet('SELECT COUNT(*) as n FROM formation_group_members WHERE formation_group_id = ?', [groupId]))?.n || 0
+
+        const facilitatorPct = (report?.attendance_count != null && memberCount > 0)
+            ? Math.round((report.attendance_count / memberCount) * 100)
+            : null
+
+        const discrepancy = (coordinatorPct != null && facilitatorPct != null)
+            ? Math.abs(coordinatorPct - facilitatorPct) > 15
+            : false
+
+        res.json({
+            success: true,
+            group_id: groupId,
+            week: weekNum,
+            coordinator_recorded: {
+                attended: coordinatorAttended,
+                total: coordinatorTotal,
+                percentage: coordinatorPct,
+                session_date: session?.session_date || null
+            },
+            facilitator_reported: {
+                attendance_count: report?.attendance_count || null,
+                member_count: memberCount,
+                percentage: facilitatorPct,
+                submitted_at: report?.submitted_at || null
+            },
+            discrepancy_flagged: discrepancy
+        })
+    } catch (error) {
+        console.error('Comparison endpoint error:', error)
+        res.status(500).json({ success: false, message: 'Failed to fetch comparison' })
+    }
+})
+
+// 9. Individual student attendance history
+// GET /api/attendance/student/:thinkificId
+router.get('/student/:thinkificId', requireAuth, async (req, res) => {
+    try {
+        const { thinkificId } = req.params
+
+        const sessions = await dbAll(`
+            SELECT gs.id as session_id, gs.week_number, gs.session_date, gs.formation_group_id,
+                fg.group_code, fg.celebration_point,
+                COALESCE(sa.attended, 0) as attended
+            FROM group_sessions gs
+            JOIN formation_groups fg ON gs.formation_group_id = fg.id
+            LEFT JOIN group_members gm ON gm.formation_group_id = gs.formation_group_id AND gm.student_thinkific_id = ?
+            LEFT JOIN session_attendance sa ON sa.session_id = gs.id AND sa.group_member_id = gm.id
+            WHERE gm.id IS NOT NULL AND gs.did_not_meet = 0
+            ORDER BY gs.session_date ASC
+        `, [String(thinkificId)])
+
+        const totalSessions = sessions.length
+        const totalAttended = sessions.filter(s => s.attended === 1).length
+        const attendancePct = totalSessions > 0 ? Math.round((totalAttended / totalSessions) * 100) : 0
+
+        res.json({
+            success: true,
+            student_id: thinkificId,
+            summary: { total_sessions: totalSessions, attended: totalAttended, percentage: attendancePct },
+            sessions
+        })
+    } catch (error) {
+        console.error('Student attendance history error:', error)
+        res.status(500).json({ success: false, message: 'Failed to fetch student attendance' })
+    }
+})
+
 export default router

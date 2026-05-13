@@ -1,5 +1,6 @@
 import express from 'express'
 import { getStudentData, getChartData, getStats, forceRefresh, getPaginatedUsers, getStudentById, getStudentProgress } from '../services/thinkific.js'
+// getPaginatedUsers provides DB-backed server-side pagination for the students list
 import { getNotes, addNote } from '../services/notes.js'
 import { getStudentTags } from '../services/tags.js'
 import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
@@ -157,8 +158,48 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
+        const { limit, page, search, sort, order, risk_category } = req.query
+
+        // Paginated mode: client requested server-side pagination
+        if (limit) {
+            // Facilitators are scoped to their group members — load IDs first
+            let facilitatorMemberIds = null
+            if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+                const members = await dbAll(`
+                    SELECT fgm.student_id FROM formation_group_members fgm
+                    JOIN formation_groups fg ON fgm.formation_group_id = fg.id
+                    WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
+                `, [user.id, user.id])
+                facilitatorMemberIds = members.map(m => String(m.student_id))
+            }
+
+            const result = await getPaginatedUsers({
+                page: parseInt(page || 1, 10),
+                limit: Math.min(parseInt(limit, 10), 200),
+                search: search || '',
+                celebrationPoint: celebrationPoint || '',
+                risk: risk_category || '',
+                sort: sort || 'name',
+                order: order || 'asc'
+            })
+
+            // Apply facilitator scope (post-filter on paginated results, acceptable for small groups)
+            if (facilitatorMemberIds) {
+                const idSet = new Set(facilitatorMemberIds)
+                result.users = (result.users || []).filter(s => idSet.has(String(s.id || s.userId)))
+            }
+
+            return res.json({
+                success: true,
+                data: result.users,
+                total: result.meta?.total || 0,
+                offset: ((parseInt(page || 1, 10) - 1) * Math.min(parseInt(limit, 10), 200)),
+                meta: result.meta
+            })
+        }
+
+        // Non-paginated (legacy) mode: return all students + stats/charts for dashboard
         const cacheKey = `cache:students:${user.id}:${celebrationPoint || 'global'}`
-        
         const cachedRes = await getCache(cacheKey)
         if (cachedRes) return res.json(cachedRes)
 

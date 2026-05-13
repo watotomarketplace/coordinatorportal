@@ -1,7 +1,11 @@
 import express from 'express'
+import multer from 'multer'
+import { parse as parseCsv } from 'csv-parse/sync'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
 import { getStudentById } from '../services/thinkific.js'
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } })
 
 const router = express.Router()
 
@@ -49,6 +53,89 @@ router.get('/codes', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('GET /formation-groups/codes error:', error.message)
         res.status(500).json({ success: false, message: 'Failed to fetch codes' })
+    }
+})
+
+// --- BULK CSV IMPORT ---
+// POST /api/formation-groups/bulk  (multipart/form-data with field "file")
+// CSV columns: group_code, campus_prefix (optional), facilitator_email (optional), co_facilitator_email (optional), cohort (optional)
+router.post('/bulk', requireGroupManager, upload.single('file'), async (req, res) => {
+    try {
+        const user = req.session.user
+        if (!req.file) return res.status(400).json({ success: false, message: 'CSV file required (field: file)' })
+
+        let rows
+        try {
+            rows = parseCsv(req.file.buffer.toString('utf-8'), {
+                columns: true,
+                skip_empty_lines: true,
+                trim: true
+            })
+        } catch (parseErr) {
+            return res.status(400).json({ success: false, message: `CSV parse error: ${parseErr.message}` })
+        }
+
+        if (!rows.length) return res.status(400).json({ success: false, message: 'CSV file is empty' })
+
+        const results = []
+        let created = 0, skipped = 0, errors = 0
+
+        for (const row of rows) {
+            const group_code = (row.group_code || '').trim().toUpperCase()
+            if (!group_code) { results.push({ row, status: 'error', message: 'Missing group_code' }); errors++; continue }
+
+            // Validate format: [A-Z]{3}\d+
+            if (!/^[A-Z]{3}\d+$/.test(group_code)) {
+                results.push({ group_code, status: 'error', message: 'Invalid code format (expected WXX##)' }); errors++; continue
+            }
+
+            // Derive celebration_point from code prefix
+            const prefix = group_code.slice(0, 3)
+            const campus = Object.entries(CAMPUS_CODES).find(([, v]) => v === prefix)?.[0]
+            if (!campus) { results.push({ group_code, status: 'error', message: `Unknown prefix: ${prefix}` }); errors++; continue }
+
+            // Campus-scoped users can only import for their own campus
+            if (!userHasAnyRole(user, ['Admin']) && campus !== user.celebration_point) {
+                results.push({ group_code, status: 'error', message: `Not your campus (${campus})` }); errors++; continue
+            }
+
+            // Check duplicate
+            const existing = await dbGet('SELECT id FROM formation_groups WHERE group_code = ?', [group_code])
+            if (existing) { results.push({ group_code, status: 'skipped', message: 'Already exists' }); skipped++; continue }
+
+            // Resolve facilitator by email
+            let facilitator_user_id = null
+            let co_facilitator_user_id = null
+            if (row.facilitator_email) {
+                const fac = await dbGet('SELECT id FROM users WHERE email = ? OR username = ?', [row.facilitator_email.trim(), row.facilitator_email.trim()])
+                if (fac) facilitator_user_id = fac.id
+            }
+            if (row.co_facilitator_email) {
+                const cofac = await dbGet('SELECT id FROM users WHERE email = ? OR username = ?', [row.co_facilitator_email.trim(), row.co_facilitator_email.trim()])
+                if (cofac) co_facilitator_user_id = cofac.id
+            }
+
+            try {
+                await dbRun(
+                    'INSERT INTO formation_groups (group_code, name, celebration_point, facilitator_user_id, co_facilitator_user_id, cohort, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
+                    [group_code, group_code, campus, facilitator_user_id, co_facilitator_user_id, row.cohort || null]
+                )
+                results.push({ group_code, status: 'created', campus })
+                created++
+            } catch (insertErr) {
+                results.push({ group_code, status: 'error', message: insertErr.message })
+                errors++
+            }
+        }
+
+        res.json({
+            success: true,
+            summary: { total: rows.length, created, skipped, errors },
+            results
+        })
+    } catch (error) {
+        console.error('POST /formation-groups/bulk error:', error.message)
+        res.status(500).json({ success: false, message: 'Bulk import failed', detail: error.message })
     }
 })
 

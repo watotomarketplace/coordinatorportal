@@ -5,7 +5,7 @@ import { User, ArrowRight, Plus } from 'lucide-react'
 
 export default function Login() {
   const [lastUser, setLastUser] = useState(null)
-  const [isOtherUser, setIsOtherUser] = useState(true)
+  const [isOtherUser, setIsOtherUser] = useState(true)  // always start with username visible
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -19,10 +19,8 @@ export default function Login() {
     const timer = setInterval(() => setTime(new Date()), 1000)
     try {
       const stored = localStorage.getItem('wl101_last_user')
-      if (stored) {
-        setLastUser(JSON.parse(stored))
-        setIsOtherUser(false)
-      }
+      if (stored) setLastUser(JSON.parse(stored))
+      // Always start with username visible — avoids stale lastUser confusion
     } catch (e) { console.error(e) }
     return () => clearInterval(timer)
   }, [])
@@ -45,7 +43,7 @@ export default function Login() {
           profile_image: user.profile_image
         }))
       }
-      navigate('/dashboard', { replace: true })
+      window.location.href = '/dashboard'
     }
   }
 

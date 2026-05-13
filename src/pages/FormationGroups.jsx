@@ -6,7 +6,7 @@ import { getGroups, getGroupDetail } from '../lib/api'
 import api from '../lib/api'
 import {
   Search, Plus, UsersRound, MapPin, ChevronRight, X, UserPlus, Trash2, Users,
-  Filter, Calendar, MessageSquare, Layout, Info, Download
+  Filter, Calendar, MessageSquare, Layout, Info, Download, Upload
 } from 'lucide-react'
 import { GroupOverviewTabs, MemberDetailPanel, AttendanceRing, AddMemberModal } from './GroupDetail'
 import { exportToCSV } from '../lib/export'
@@ -137,6 +137,102 @@ function CreateGroupModal({ onClose, onCreated }) {
   )
 }
 
+function ImportGroupsModal({ onClose, onImported }) {
+  const [file, setFile] = useState(null)
+  const [results, setResults] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async () => {
+    if (!file) return setError('Please select a CSV file')
+    setLoading(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/formation-groups/bulk', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.message || 'Import failed')
+      setResults(data)
+      if (data.summary?.created > 0) onImported?.()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" style={{ maxWidth: 520, padding: 0 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>Import Groups from CSV</h2>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ padding: '20px 24px' }}>
+          {!results ? (
+            <>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
+                CSV columns: <code>group_code</code>, <code>facilitator_email</code> (optional), <code>co_facilitator_email</code> (optional), <code>cohort</code> (optional)
+              </p>
+              <input
+                type="file" accept=".csv" style={{ display: 'none' }} id="csv-upload-input"
+                onChange={e => { setFile(e.target.files?.[0] || null); setError('') }}
+              />
+              <label htmlFor="csv-upload-input" style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px',
+                background: 'var(--bg-tertiary)', borderRadius: 10, border: '2px dashed rgba(255,255,255,0.15)',
+                cursor: 'pointer', marginBottom: 12
+              }}>
+                <Upload size={18} style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: 14, color: file ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                  {file ? file.name : 'Choose CSV file…'}
+                </span>
+              </label>
+              {error && <p style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSubmit} disabled={loading || !file}>
+                  {loading ? 'Importing…' : 'Import'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ background: 'var(--bg-tertiary)', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 20, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Created', value: results.summary?.created, color: '#30d158' },
+                    { label: 'Skipped', value: results.summary?.skipped, color: '#f59e0b' },
+                    { label: 'Errors', value: results.summary?.errors, color: '#ef4444' },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 16 }}>
+                {(results.results || []).filter(r => r.status !== 'created').map((r, i) => (
+                  <div key={i} style={{ fontSize: 12, padding: '4px 0', color: r.status === 'error' ? '#ef4444' : '#f59e0b' }}>
+                    {r.group_code}: {r.message || r.status}
+                  </div>
+                ))}
+              </div>
+              <button className="btn btn-primary" style={{ width: '100%' }} onClick={onClose}>Done</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function FormationGroups() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
   const platform = useAppStore(s => s.platform)
@@ -149,6 +245,7 @@ export default function FormationGroups() {
   const [search, setSearch] = useState('')
   const [campusFilter, setCampusFilter] = useState('All')
   const [showCreate, setShowCreate] = useState(false)
+  const [showImport, setShowImport] = useState(false)
 
   // Sub-detail states
   const [selectedGroupId, setSelectedGroupId] = useState(null)
@@ -229,6 +326,7 @@ export default function FormationGroups() {
     return (
       <div className="three-col" style={{ gridTemplateColumns: '300px 380px 1fr', gap: 0, margin: '-24px', height: 'calc(100vh - 64px)' }}>
         {showCreate && <CreateGroupModal onClose={() => setShowCreate(false)} onCreated={loadGroups} />}
+        {showImport && <ImportGroupsModal onClose={() => setShowImport(false)} onImported={loadGroups} />}
         {showAddMember && selectedGroupId && <AddMemberModal groupId={selectedGroupId} onClose={() => setShowAddMember(false)} onAdded={() => loadGroupDetail(selectedGroupId)} />}
 
         {/* Column 1 - Groups List */}
@@ -237,9 +335,14 @@ export default function FormationGroups() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700 }}>Groups ({filtered.length})</h2>
               {(hasRole('Admin') || hasRole('Coordinator') || hasRole('TechSupport') || hasRole('Pastor')) && (
-                <button className="btn btn-primary btn-icon btn-sm" onClick={() => setShowCreate(true)}>
-                  <Plus size={16} />
-                </button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn btn-secondary btn-icon btn-sm" title="Import groups from CSV" onClick={() => setShowImport(true)}>
+                    <Upload size={15} />
+                  </button>
+                  <button className="btn btn-primary btn-icon btn-sm" onClick={() => setShowCreate(true)}>
+                    <Plus size={16} />
+                  </button>
+                </div>
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -422,6 +525,7 @@ export default function FormationGroups() {
         <button className="fab" onClick={() => setShowCreate(true)}><Plus size={24} /></button>
       )}
       {showCreate && <CreateGroupModal onClose={() => setShowCreate(false)} onCreated={loadGroups} />}
+      {showImport && <ImportGroupsModal onClose={() => setShowImport(false)} onImported={loadGroups} />}
     </div>
   )
 }

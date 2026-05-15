@@ -16,6 +16,7 @@ let cache = {
     lastSyncAttempt: 0,
     lastSyncSuccess: 0,
     syncError: null,
+    isSyncing: false,
     duration: 5 * 60 * 1000 // 5 minutes
 }
 
@@ -281,9 +282,10 @@ async function upsertStudent(student) {
     ])
 }
 
-async function doRefresh() {
+export async function doRefresh() {
     if (refreshPromise) return refreshPromise
     refreshPromise = (async () => {
+        cache.isSyncing = true
         try {
             const client = await createClient()
             console.log('🔄 Syncing Thinkific students...')
@@ -343,9 +345,10 @@ async function doRefresh() {
             const unknownCount = processed.filter(s => s.celebration_point === 'Unknown').length
             console.log(`✅ Sync complete: ${processed.length} students total. ${unknownCount} with unrecognized campus ('Unknown').`)
         } catch (error) {
-            console.error('❌ Sync failed:', error.message)
+            console.error('❌ Sync failed:', error.message, error.response?.data || '')
             cache.syncError = error.message
         } finally {
+            cache.isSyncing = false
             refreshPromise = null
         }
     })()
@@ -360,20 +363,48 @@ export function getStudentProgress(id) {
 export async function preWarmCache() {
     // Priority: DB → file cache → background refresh
     const fromDB = await loadCacheFromDB()
-    if (!fromDB) loadCacheFromFile()
+    if (!fromDB) {
+        // Load file cache and use file modification time as the sync timestamp
+        try {
+            if (fs.existsSync(CACHE_FILE)) {
+                const stats = fs.statSync(CACHE_FILE)
+                const saved = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
+                if (saved.data && Array.isArray(saved.data) && saved.data.length > 0) {
+                    cache = { ...cache, ...saved, duration: cache.duration }
+                    // Always use file mtime so status pill shows a real age instead of "Not synced"
+                    if (!cache.timestamp || cache.timestamp === 0) {
+                        cache.timestamp = stats.mtimeMs
+                        cache.lastSyncSuccess = stats.mtimeMs
+                    }
+                    const ageMin = Math.round((Date.now() - stats.mtimeMs) / 60000)
+                    console.log(`✅ Cache loaded from disk: ${saved.data.length} students, age: ${ageMin}min`)
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ preWarmCache file load error:', e.message)
+        }
+    }
     if (!cache.data || cache.data.length === 0 || (Date.now() - cache.timestamp > cache.duration)) {
         triggerRefresh()
     }
 }
 
 export function getCacheStatus() {
+    const ts = cache.lastSyncSuccess || cache.timestamp || null
     return {
         isLoaded: !!cache.data,
         studentCount: cache.data?.length || 0,
         cacheSize: cache.data?.length || 0,
+        // Fields the frontend SyncPill reads:
+        lastSync: ts,
+        syncing: cache.isSyncing || false,
+        error: cache.syncError || null,
+        isStale: ts ? (Date.now() - ts) > cache.duration : true,
+        ageMinutes: ts ? Math.floor((Date.now() - ts) / 60000) : null,
+        // Legacy fields kept for diagnostics page:
         lastSyncSuccess: cache.lastSyncSuccess,
         lastSyncAttempt: cache.lastSyncAttempt,
-        syncError: cache.syncError
+        syncError: cache.syncError,
     }
 }
 

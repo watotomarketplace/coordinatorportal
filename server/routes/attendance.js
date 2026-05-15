@@ -370,7 +370,8 @@ router.get('/dashboard', requireAuth, async (req, res) => {
         const groups = await dbAll(`
             SELECT fg.id, fg.group_code, fg.name, fg.celebration_point,
                 COUNT(DISTINCT gs.id) as total_sessions,
-                COUNT(DISTINCT gm.id) as member_count
+                COUNT(DISTINCT gm.id) as member_count,
+                (SELECT COUNT(*) FROM weekly_reports wr WHERE wr.formation_group_id = fg.id) as tally_report_count
             FROM formation_groups fg
             LEFT JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
             LEFT JOIN group_members gm ON gm.formation_group_id = fg.id AND gm.active = 1
@@ -422,6 +423,76 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('Attendance dashboard error:', error)
         res.status(500).json({ success: false, message: 'Failed to load dashboard' })
+    }
+})
+
+// 7b. Remove a member from the attendance roster (soft-delete + remove from formation group)
+// DELETE /api/attendance/group/:groupId/members/:memberId
+router.delete('/group/:groupId/members/:memberId', requireAuth, async (req, res) => {
+    try {
+        const { groupId, memberId } = req.params
+        if (!(await checkGroupAccess(req.session.user, groupId, true))) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+        const member = await dbGet('SELECT * FROM group_members WHERE id = ? AND formation_group_id = ?', [memberId, groupId])
+        if (!member) return res.status(404).json({ success: false, message: 'Member not found' })
+
+        // Soft-deactivate in attendance roster
+        await dbRun('UPDATE group_members SET active = 0 WHERE id = ?', [memberId])
+
+        // Also remove from formation_group_members so auto-sync doesn't re-activate them
+        if (member.student_thinkific_id) {
+            await dbRun(
+                'DELETE FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
+                [groupId, String(member.student_thinkific_id)]
+            )
+        }
+
+        await invalidatePattern('cache:dashboard:*')
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Remove member error:', error)
+        res.status(500).json({ success: false, message: 'Failed to remove member' })
+    }
+})
+
+// 7c. Weekly-summary for a group: portal sessions + Tally-submitted weekly reports
+// GET /api/attendance/group/:groupId/weekly-summary
+router.get('/group/:groupId/weekly-summary', requireAuth, async (req, res) => {
+    try {
+        const { groupId } = req.params
+        if (!(await checkGroupAccess(req.session.user, groupId))) {
+            return res.status(403).json({ success: false, message: 'Access denied' })
+        }
+
+        const tallyReports = await dbAll(`
+            SELECT week_number, attendance_count, engagement_level, submitted_at
+            FROM weekly_reports
+            WHERE formation_group_id = ?
+            ORDER BY week_number ASC
+        `, [groupId])
+
+        const portalSessions = await dbAll(`
+            SELECT gs.id, gs.session_date, gs.week_number, gs.did_not_meet,
+                SUM(CASE WHEN sa.attended = 1 THEN 1 ELSE 0 END) as attended_count,
+                COUNT(sa.id) as total_checked
+            FROM group_sessions gs
+            LEFT JOIN session_attendance sa ON sa.session_id = gs.id
+            WHERE gs.formation_group_id = ?
+            GROUP BY gs.id, gs.session_date, gs.week_number, gs.did_not_meet
+            ORDER BY gs.session_date ASC
+        `, [groupId])
+
+        res.json({
+            success: true,
+            portalSessions,
+            tallyReports,
+            hasPortalData: portalSessions.length > 0,
+            hasTallyData: tallyReports.length > 0,
+        })
+    } catch (error) {
+        console.error('Weekly summary error:', error)
+        res.status(500).json({ success: false, message: 'Failed to fetch weekly summary' })
     }
 })
 

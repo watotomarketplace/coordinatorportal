@@ -1,5 +1,5 @@
 import express from 'express'
-import { getUnenrolledUsers, enrollUser, getCacheStatus, testConnection, forceRefresh, rawTestConnection, searchStudents } from '../services/thinkific.js'
+import { getUnenrolledUsers, enrollUser, getCacheStatus, testConnection, forceRefresh, doRefresh, rawTestConnection, searchStudents } from '../services/thinkific.js'
 import { requireAuth, applyCampusScope } from '../middleware/rbac.js'
 
 const router = express.Router()
@@ -63,7 +63,7 @@ router.post('/enroll', requireAdmin, async (req, res) => {
 // ─── ADMIN TOOLS ──────────────────────────────────────────────────────────
 
 // GET /api/thinkific/status
-router.get('/status', requireAdmin, (req, res) => {
+router.get('/status', requireAuth, (req, res) => {
     try {
         const port = process.env.PORT || 3000
         const webhookUrl = `${req.protocol}://${req.get('host')}/api/webhooks/thinkific`
@@ -84,11 +84,11 @@ router.post('/test', requireAdmin, async (req, res) => {
     }
 })
 
-// POST /api/thinkific/refresh (Alias for backward compatibility)
+// POST /api/thinkific/refresh — fires background sync, returns current status immediately
 router.post('/refresh', requireAdmin, (req, res) => {
     try {
-        forceRefresh()
-        res.json({ success: true, message: "Cache refresh triggered in background" })
+        forceRefresh() // sets isSyncing = true synchronously before first await
+        res.json({ success: true, message: "Cache refresh triggered", ...getCacheStatus() })
     } catch (e) {
         res.json({ success: false, message: e.message })
     }

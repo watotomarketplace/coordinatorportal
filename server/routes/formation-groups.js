@@ -2,7 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import { parse as parseCsv } from 'csv-parse/sync'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
-import { requireAuth, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
+import { requireAuth, requireAdmin, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
 import { getStudentById } from '../services/thinkific.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } })
@@ -24,16 +24,18 @@ const CAMPUS_CODES = {
     'Ntinda': 'WNT', 'Online': 'WON', 'Suubi': 'WSU'
 }
 
-// Generate next group code
+// Generate next group code — fills gaps rather than always max+1
 async function generateGroupCode(celebrationPoint) {
     const prefix = CAMPUS_CODES[celebrationPoint]
-    if (!prefix) throw new Error(`Unknown celebration point: "${celebrationPoint}"`)
+    if (!prefix) throw new Error(`Unknown celebration point: "${celebrationPoint}". Valid values: ${Object.keys(CAMPUS_CODES).join(', ')}`)
     const allCodes = await dbAll('SELECT group_code FROM formation_groups WHERE celebration_point = ?', [celebrationPoint])
-    const nums = allCodes.map(r => {
-        const match = r.group_code.match(/(\d+)$/)
-        return match ? parseInt(match[1], 10) : 0
-    }).filter(n => !isNaN(n))
-    const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1
+    const usedNums = new Set(
+        allCodes
+            .map(r => { const m = r.group_code?.match(/(\d+)$/); return m ? parseInt(m[1], 10) : null })
+            .filter(n => n !== null && !isNaN(n))
+    )
+    let nextNum = 1
+    while (usedNums.has(nextNum)) nextNum++
     return `${prefix}${String(nextNum).padStart(2, '0')}`
 }
 
@@ -53,6 +55,19 @@ router.get('/codes', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('GET /formation-groups/codes error:', error.message)
         res.status(500).json({ success: false, message: 'Failed to fetch codes' })
+    }
+})
+
+// --- NEXT CODE PREVIEW ---
+// GET /api/formation-groups/next-code?campus=Lubowa
+router.get('/next-code', requireAuth, async (req, res) => {
+    const { campus } = req.query
+    if (!campus) return res.status(400).json({ success: false, message: 'campus required' })
+    try {
+        const code = await generateGroupCode(campus)
+        res.json({ success: true, code })
+    } catch (err) {
+        res.status(400).json({ success: false, message: err.message })
     }
 })
 
@@ -376,6 +391,49 @@ router.get('/:id/comments', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('GET /formation-groups/:id/comments error:', error.message)
         res.status(500).json({ success: false, message: 'Failed to fetch comments' })
+    }
+})
+
+// --- FIX GROUP CODE (Admin only) ---
+// PUT /api/formation-groups/:id/fix-code
+router.put('/:id/fix-code', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params
+        const { new_code, reactivate } = req.body
+        if (!new_code) return res.status(400).json({ success: false, message: 'new_code required' })
+
+        const raw = new_code.trim().toUpperCase()
+        const match = raw.match(/^([A-Z]{3})(\d+)$/)
+        if (!match) return res.status(400).json({ success: false, message: 'Code must be 3-letter campus prefix + number (e.g. WLB06)' })
+
+        const normalised = `${match[1]}${String(parseInt(match[2], 10)).padStart(2, '0')}`
+
+        const conflict = await dbGet('SELECT id FROM formation_groups WHERE group_code = ? AND id != ?', [normalised, id])
+        if (conflict) return res.status(400).json({ success: false, message: `${normalised} is already taken by another group` })
+
+        const group = await dbGet('SELECT group_code, active FROM formation_groups WHERE id = ?', [id])
+        if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
+
+        await dbRun(
+            'UPDATE formation_groups SET group_code = ?, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [normalised, normalised, id]
+        )
+
+        if (reactivate && !group.active) {
+            await dbRun('UPDATE formation_groups SET active = 1 WHERE id = ?', [id])
+        }
+
+        try {
+            await dbRun(
+                `INSERT INTO audit_logs (user_id, action, target_type, target_id, details, created_at) VALUES (?, 'GROUP_CODE_FIX', 'formation_group', ?, ?, CURRENT_TIMESTAMP)`,
+                [req.session.user.id, id, JSON.stringify({ old_code: group.group_code, new_code: normalised })]
+            )
+        } catch (_) {}
+
+        res.json({ success: true, new_code: normalised, message: `Group code updated to ${normalised}` })
+    } catch (error) {
+        console.error('PUT /formation-groups/:id/fix-code error:', error.message)
+        res.status(500).json({ success: false, message: 'Failed to fix group code' })
     }
 })
 

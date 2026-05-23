@@ -282,6 +282,22 @@ export default function AttendanceDashboard() {
 
             {/* Main Content */}
             <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Info banner — explains portal check-ins vs Tally weekly reports */}
+                <div style={{
+                    display: 'flex', gap: 12, alignItems: 'flex-start',
+                    padding: '14px 18px', marginBottom: 20, borderRadius: 12,
+                    background: 'rgba(74,158,255,0.08)', border: '1px solid rgba(74,158,255,0.25)',
+                    borderLeft: '3px solid #4A9EFF',
+                }}>
+                    <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>ℹ️</span>
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'rgba(255,255,255,0.92)', marginBottom: 3 }}>About Attendance Tracking</div>
+                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', lineHeight: 1.55 }}>
+                            This section tracks <strong style={{ color: 'rgba(255,255,255,0.75)' }}>portal check-ins</strong> — where a facilitator opens the portal and marks each member present or absent. Weekly report submissions via the Tally form are recorded separately under <strong style={{ color: 'rgba(255,255,255,0.75)' }}>Weekly Reports</strong>. Groups showing "0 sessions" have not yet used the portal check-in feature.
+                        </div>
+                    </div>
+                </div>
+
                 {/* Header */}
                 <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
@@ -346,8 +362,21 @@ export default function AttendanceDashboard() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                     <AttendanceRing percentage={g.avg_pct || 0} size={44} />
                                     <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Attendance</div>
-                                        <AttBar pct={g.avg_pct} />
+                                        {Number(g.total_sessions) > 0 ? (
+                                            <>
+                                                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Attendance</div>
+                                                <AttBar pct={g.avg_pct} />
+                                            </>
+                                        ) : (
+                                            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.4 }}>
+                                                No portal check-ins yet
+                                                {Number(g.tally_report_count) > 0 && (
+                                                    <span style={{ display: 'block', marginTop: 3, color: 'rgba(74,158,255,0.7)', fontWeight: 600 }}>
+                                                        · {g.tally_report_count} Tally report{g.tally_report_count !== 1 ? 's' : ''} submitted
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

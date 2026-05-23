@@ -57,6 +57,22 @@ export const useAppStore = create((set) => ({
   },
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  
+
   setPageTitle: (title) => set({ pageTitle: title }),
+
+  // Menu bar context — tracks currently selected items so page-specific menus know what to act on
+  menuBar: {
+    activeMenu: null,
+    selectedStudent: null,
+    selectedGroup: null,
+    selectedReport: null,
+    selectedUser: null,
+    selectedSession: null,
+  },
+  setMenuBarContext: (key, value) => set(state => ({
+    menuBar: { ...state.menuBar, [key]: value }
+  })),
+  setActiveMenu: (menu) => set(state => ({
+    menuBar: { ...state.menuBar, activeMenu: menu }
+  })),
 }))

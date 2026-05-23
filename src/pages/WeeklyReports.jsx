@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import api from '../lib/api'
 import { FileText, Send, CheckCircle, Clock, AlertCircle, ChevronRight, Plus, X, BarChart3, Users, MessageSquare, Download } from 'lucide-react'
 import { exportToCSV } from '../lib/export'
+import menuBus from '../lib/menuBus.js'
 
 function EngagementBadge({ level }) {
   const colors = {
@@ -77,6 +78,24 @@ export default function WeeklyReports() {
       setSyncing(false)
     }
   }
+
+  const reportsRef = useRef([])
+  reportsRef.current = reports
+  const campusFilterRef = useRef('All')
+  campusFilterRef.current = campusFilter
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('weekly-reports:sync', () => handleSync(false)),
+      menuBus.on('weekly-reports:export', () => {
+        const fr = reportsRef.current.filter(r => campusFilterRef.current === 'All' || r.celebration_point === campusFilterRef.current)
+        exportToCSV(fr, 'weekly-reports.csv')
+      }),
+      menuBus.on('weekly-reports:filter-campus', ({ campus }) => setCampusFilter(campus ?? 'All')),
+      menuBus.on('weekly-reports:clear-filters', () => setCampusFilter('All')),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   if (loading) return <div style={{ padding: 24 }}>{[0, 1, 2, 3].map(i => <div key={i} className="skeleton skeleton-row" style={{ height: 100, marginBottom: 12, borderRadius: 16 }} />)}</div>
 

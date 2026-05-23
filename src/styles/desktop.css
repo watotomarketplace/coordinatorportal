@@ -7,6 +7,7 @@
   justify-content: center;
   align-items: center;
   padding: 40px;
+  padding-top: 48px; /* 28px menu bar + 20px breathing room */
   background-size: cover;
   background-position: center;
   /* wallpaper-url is defined on the body via JS */
@@ -34,6 +35,12 @@
   flex-direction: column;
   overflow: hidden; /* Scrollable area is internal */
   resize: both;     /* Standard CSS resize */
+}
+
+/* Dragged state — window is positioned fixed by JS, disable centering */
+.desktop-window[data-dragged="true"] {
+  margin: 0 !important;
+  transform: none !important;
 }
 
 /* Light Theme Override for Window */

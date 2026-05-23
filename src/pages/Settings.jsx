@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import api from '../lib/api'
+import menuBus from '../lib/menuBus.js'
 import { User, Palette, Image, Bell, LogOut, Moon, Sun, Monitor, ChevronRight, Check, Server, Save, Plus } from 'lucide-react'
 
 const WALLPAPERS = [
@@ -78,6 +79,17 @@ export default function Settings() {
       setSysSaving(false)
     }
   }
+
+  const saveSettingsRef = useRef(null)
+  saveSettingsRef.current = saveSettings
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('settings:save', () => saveSettingsRef.current?.()),
+      menuBus.on('settings:tab', ({ tab: t }) => setTab(t)),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   const handleAddCampus = async () => {
     if (!newCampus.trim()) return

@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import { getDashboardStats, getAttendanceDashboard } from '../lib/api'
 import api from '../lib/api'
+import menuBus from '../lib/menuBus.js'
 import { CELEBRATION_POINTS } from '../constants/campuses'
 import {
   Chart as ChartJS,
@@ -196,6 +197,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [selectedCampus, setSelectedCampus] = useState(isGlobal ? '' : (user?.celebration_point || ''))
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const handleForceRefresh = async () => {
     try {
@@ -212,6 +214,17 @@ export default function Dashboard() {
   useEffect(() => {
     setPageTitle('Dashboard')
   }, [setPageTitle])
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('dashboard:refresh', () => setRefreshKey(k => k + 1)),
+      menuBus.on('dashboard:filter-campus', ({ campus }) => setSelectedCampus(campus ?? '')),
+      menuBus.on('dashboard:scroll', ({ section }) =>
+        document.getElementById('dashboard-' + section)?.scrollIntoView({ behavior: 'smooth' })
+      ),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   useEffect(() => {
     async function fetchData() {
@@ -234,7 +247,7 @@ export default function Dashboard() {
     }
     setLoading(true)
     fetchData()
-  }, [selectedCampus])
+  }, [selectedCampus, refreshKey])
 
   if (loading) {
     return (

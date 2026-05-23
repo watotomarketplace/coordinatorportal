@@ -2,7 +2,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 
-export default function WindowControls({ title }) {
+export default function WindowControls({ title, onTitleMouseDown, onTitleDoubleClick }) {
   const logout = useAuthStore(s => s.logout)
   const navigate = useNavigate()
 
@@ -30,14 +30,20 @@ export default function WindowControls({ title }) {
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      padding: '12px 16px',
-      borderBottom: '1px solid rgba(255,255,255,0.08)',
-      background: 'rgba(255,255,255,0.02)', // slight tint for titlebar
-      WebkitAppRegion: 'drag', // macOS draggable window support
-    }}>
+    <div
+      onMouseDown={onTitleMouseDown}
+      onDoubleClick={onTitleDoubleClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(255,255,255,0.02)',
+        cursor: 'default',
+        userSelect: 'none',
+        WebkitAppRegion: 'drag',
+      }}
+    >
       {/* Traffic Lights */}
       <div style={{ display: 'flex', gap: '8px', zIndex: 10, WebkitAppRegion: 'no-drag' }}>
         {/* Close (Red) */}

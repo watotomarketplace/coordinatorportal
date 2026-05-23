@@ -4,6 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { calculateRiskScore } from './risk.js'
 import { dbGet, dbAll, dbRun, IS_POSTGRES } from '../db/init.js'
+import { getThinkificCredentials } from './thinkific-common.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -27,7 +28,7 @@ const VALID_CELEBRATION_POINTS = [
     'Ntinda', 'Online', 'Suubi'
 ]
 
-function normalizeCelebrationPoint(raw) {
+export function normalizeCelebrationPoint(raw) {
     if (!raw) return 'Unknown'
     // Strip "Watoto Church" prefix (with optional comma/space after it)
     let clean = raw
@@ -40,13 +41,12 @@ function normalizeCelebrationPoint(raw) {
 }
 
 async function createClient() {
-    const apiKeyRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_api_key'")
-    const subdomainRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_subdomain'")
+    const { apiKey, subdomain } = await getThinkificCredentials()
     return axios.create({
-        baseURL: `https://api.thinkific.com/api/public/v1`,
+        baseURL: 'https://api.thinkific.com/api/public/v1',
         headers: {
-            'X-Auth-API-Key': apiKeyRow?.value || process.env.THINKIFIC_API_KEY,
-            'X-Auth-Subdomain': subdomainRow?.value || process.env.THINKIFIC_SUBDOMAIN,
+            'X-Auth-API-Key': apiKey,
+            'X-Auth-Subdomain': subdomain,
             'Content-Type': 'application/json'
         },
         timeout: 20000
@@ -60,7 +60,8 @@ export async function getStudentData(filterCP = null) {
         return { students: filterCP ? cache.data.filter(s => s.celebration_point === filterCP) : cache.data, lastUpdated: cache.timestamp }
     }
     await doRefresh()
-    return { students: filterCP ? cache.data.filter(s => s.celebration_point === filterCP) : cache.data, lastUpdated: cache.timestamp }
+    const data = cache.data || []
+    return { students: filterCP ? data.filter(s => s.celebration_point === filterCP) : data, lastUpdated: cache.timestamp }
 }
 
 export function getStats(students) {
@@ -255,6 +256,17 @@ function saveCache() {
     } catch (e) { console.error('Cache save failed:', e.message) }
 }
 
+function saveCacheSync() {
+    try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache), 'utf8')
+    } catch (e) { console.warn('⚠️ Sync cache write failed:', e.message) }
+}
+
+let rawUserCache = []          // full /users array — used by diagnostics endpoints for lookups
+let rawEnrollmentCount = 0    // total enrollments fetched — used to compute dropped count
+export function getRawCache() { return rawUserCache }
+export function getRawEnrollmentCount() { return rawEnrollmentCount }
+
 let refreshPromise = null
 function triggerRefresh() {
     if (refreshPromise) return
@@ -274,79 +286,321 @@ async function upsertStudent(student) {
         : `INSERT OR REPLACE INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`
 
+    const riskScore = student.risk?.score ?? student.risk_score ?? 0
+    const riskCat   = student.risk?.category ?? student.risk_category ?? 'Healthy'
+    const rawUser   = student._rawEnrollment?.user || null
     await dbRun(upsertSql, [
-        String(student.id), String(student.userId), student.name, student.email,
-        student.celebration_point, student.progress, student.risk.score, student.risk.category,
-        student.lastActivity || null, student.joinedAt || null, student.status || null,
-        JSON.stringify({ user: student._rawUser, enrollment: student._rawEnrollment })
+        String(student.userId), String(student.userId), student.name, student.email,
+        student.celebration_point, student.progress, riskScore, riskCat,
+        student.last_sign_in_at || student.lastActivity || null,
+        student.joinedAt || student.lastActivity || null,
+        student.status || null,
+        JSON.stringify({ user: rawUser, enrollment: student._rawEnrollment })
     ])
+}
+
+// processEnrollment — parse a v2 enrollment object (embedded user) into a portal student record
+export function processEnrollment(enrollment) {
+    if (!enrollment || typeof enrollment !== 'object') return null
+
+    const user = enrollment.user
+    if (!user || typeof user !== 'object') return null
+
+    const firstName = (user.first_name || '').trim()
+    const lastName  = (user.last_name  || '').trim()
+    // v1 enrollment carries user_name as "First Last" — use as fallback if user object has no name
+    const fallbackName = (enrollment.user_name || '').trim()
+    const fullName  = [firstName, lastName].filter(Boolean).join(' ') || fallbackName
+
+    if (!fullName) return null
+
+    // v1 enrollment also carries user_email as fallback
+    const email  = (user.email || enrollment.user_email || '').trim().toLowerCase()
+    const userId = String(user.id || enrollment.user_id || '')
+    if (!userId) return null
+
+    const rawProgress = parseFloat(enrollment.percentage_completed) || 0
+    const progress = rawProgress <= 1.0
+        ? Math.round(rawProgress * 100)
+        : Math.round(rawProgress)
+
+    const rawCampus      = (user.company || '').trim()
+    const celebrationPoint = normalizeCelebrationPoint(rawCampus)
+    const risk           = calculateRiskScore(user, enrollment)
+    const lastActivity   = enrollment.updated_at || enrollment.created_at || null
+
+    return {
+        userId, id: userId,
+        name: fullName, firstName, lastName,
+        email: email || `no-email-${userId}@unknown`,
+        campus: celebrationPoint,
+        celebration_point: celebrationPoint,
+        rawCampus,
+        progress, percentage_completed: progress,
+        enrollmentId: enrollment.id,
+        courseId: enrollment.course_id,
+        status: enrollment.activated_at ? 'active' : 'inactive',
+        enrollmentStatus: enrollment.activated_at ? 'active' : 'inactive',
+        risk_score: risk.score, risk_category: risk.category,
+        risk,
+        last_sign_in_at: user.last_sign_in_at || null,
+        lastActivity,
+        joinedAt: enrollment.created_at || null,
+        daysInactive: lastActivity
+            ? Math.floor((Date.now() - new Date(lastActivity).getTime()) / 86400000)
+            : 999,
+        profileImage: user.avatar_url || null,
+        thinkificId: userId,
+        _rawEnrollment: enrollment,
+    }
+}
+
+async function saveSyncReport(report) {
+    try {
+        const sql = IS_POSTGRES
+            ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value"
+            : "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)"
+        await dbRun(sql, ['last_thinkific_sync_report', JSON.stringify(report)])
+    } catch (e) {
+        console.warn('Could not save sync report:', e.message)
+    }
 }
 
 export async function doRefresh() {
     if (refreshPromise) return refreshPromise
     refreshPromise = (async () => {
         cache.isSyncing = true
+        cache.lastSyncAttempt = Date.now()
+        console.log('🔄 Thinkific sync starting...')
         try {
-            const client = await createClient()
-            console.log('🔄 Syncing Thinkific students...')
-            cache.lastSyncAttempt = Date.now()
+            const { apiKey, subdomain } = await getThinkificCredentials()
 
-            let users = []
+            // Fix 1: Check for last full sync to enable incremental mode
+            const lastSyncRow = await dbGet("SELECT value FROM system_settings WHERE key = 'thinkific_last_full_sync'")
+            const lastSyncMs = lastSyncRow?.value ? parseInt(lastSyncRow.value, 10) : 0
+            const ageMs = Date.now() - lastSyncMs
+            const isIncremental = lastSyncMs > 0 && ageMs < 30 * 60 * 1000 // incremental if last sync < 30 min ago
+            const updatedAfterISO = isIncremental
+                ? new Date(lastSyncMs - 2 * 60 * 1000).toISOString() // 2-min buffer to avoid gaps
+                : null
+            if (isIncremental) {
+                console.log(`🔄 Incremental sync: fetching enrollments updated since ${updatedAfterISO}`)
+            }
+
+            const allEnrollments = []
             let page = 1
-            while (page <= 100) {
-                const res = await client.get('/users', { params: { page, limit: 50 } })
-                users.push(...(res.data.items || []))
-                if (page >= res.data.meta.pagination.total_pages) break
-                page++
-                await new Promise(r => setTimeout(r, 500))
-            }
+            let hasMore = true
+            let totalFromApi = null
 
-            let enrollments = []
-            page = 1
-            while (page <= 100) {
-                const res = await client.get('/enrollments', { params: { page, limit: 50, 'query[product_id]': 3300782 } })
-                enrollments.push(...(res.data.items || []))
-                if (page >= res.data.meta.pagination.total_pages) break
-                page++
-                await new Promise(r => setTimeout(r, 500))
-            }
+            while (hasMore) {
+                const response = await axios.get(
+                    'https://api.thinkific.com/api/public/v1/enrollments',
+                    {
+                        headers: {
+                            'X-Auth-API-Key': apiKey,
+                            'X-Auth-Subdomain': subdomain,
+                            'Content-Type': 'application/json',
+                        },
+                        params: updatedAfterISO
+                            ? { page, limit: 250, 'query[updated_at_gte]': updatedAfterISO }
+                            : { page, limit: 250 },
+                        timeout: 45000,
+                    }
+                )
 
-            const userMap = new Map(users.map(u => [u.id, u]))
-            const processed = enrollments.map(e => {
-                const u = userMap.get(e.user_id) || {}
-                const student = {
-                    id: e.id,
-                    userId: e.user_id,
-                    name: `${u.first_name || ''} ${u.last_name || ''}`.trim(),
-                    email: u.email,
-                    celebration_point: normalizeCelebrationPoint(u.company),
-                    progress: Math.round((e.percentage_completed || 0) * 100),
-                    status: e.status,
-                    lastActivity: e.last_engagement_at || u.last_sign_in_at,
-                    joinedAt: e.created_at,
-                    _rawUser: u,
-                    _rawEnrollment: e
+                const items = response.data?.items || response.data?.data || []
+                allEnrollments.push(...items)
+
+                const pagination = response.data?.meta?.pagination || response.data?.pagination || null
+
+                if (page === 1) {
+                    console.log('📋 Enrollment pagination shape:', JSON.stringify({
+                        pagination, keys: pagination ? Object.keys(pagination) : 'none'
+                    }))
+                    if (pagination) {
+                        // Thinkific v1 uses total_entries (not total) and total_pages (not num_pages)
+                        totalFromApi = pagination.total_entries || pagination.total || null
+                        const totalPages = pagination.total_pages || pagination.num_pages || null
+                        if (totalFromApi) console.log(`📊 Thinkific reports ${totalFromApi} total enrollments across ${totalPages ?? '?'} pages`)
+                        else if (totalPages) console.log(`📊 Thinkific reports ${totalPages} enrollment pages`)
+                    }
+                    if (items.length > 0) {
+                        const s = items[0]
+                        console.log('📋 Enrollment record shape:', JSON.stringify({
+                            keys: Object.keys(s), course_id: s.course_id,
+                            course_name: s.course_name, has_user: !!s.user,
+                        }))
+                    }
                 }
-                student.risk = calculateRiskScore(u, e)
-                student.risk_category = student.risk.category
-                return student
+
+                const enrollTotalPages = pagination?.total_pages || pagination?.num_pages || null
+                const reachedTotalPages = enrollTotalPages !== null && page >= enrollTotalPages
+                const isLastPage = items.length === 0 || items.length < 250 || reachedTotalPages
+                hasMore = !isLastPage
+                page++
+
+                if (page > 100) {
+                    console.warn('⚠️ Hit 100-page safety limit — stopping')
+                    hasMore = false
+                }
+
+                if (hasMore) await new Promise(r => setTimeout(r, 150))
+            }
+
+            console.log(`📥 Fetched ${allEnrollments.length} total enrollments`)
+            rawEnrollmentCount = allEnrollments.length
+
+            // Fetch all users separately — v1 enrollments are flat (no embedded user object)
+            console.log('👥 Fetching all users from Thinkific...')
+            const allUsers = []
+            let userPage = 1
+            let userTotalPages = null
+
+            while (true) {
+                const userRes = await axios.get(
+                    'https://api.thinkific.com/api/public/v1/users',
+                    {
+                        headers: { 'X-Auth-API-Key': apiKey, 'X-Auth-Subdomain': subdomain },
+                        params: { page: userPage, limit: 250 },
+                        timeout: 45000,
+                    }
+                )
+                const users = userRes.data?.items || userRes.data?.data || []
+                allUsers.push(...users)
+
+                if (userPage === 1) {
+                    const up = userRes.data?.meta?.pagination || userRes.data?.pagination || null
+                    console.log('👥 User pagination shape:', JSON.stringify({
+                        pagination: up, keys: up ? Object.keys(up) : 'none', itemsOnPage1: users.length
+                    }))
+                    if (up) {
+                        // Thinkific v1 uses total_pages (not num_pages)
+                        userTotalPages = up.total_pages || up.num_pages || up.pages || null
+                        if (userTotalPages === null && up.total_entries && users.length > 0) {
+                            userTotalPages = Math.ceil(up.total_entries / users.length)
+                        } else if (userTotalPages === null && up.total && users.length > 0) {
+                            userTotalPages = Math.ceil(up.total / users.length)
+                        }
+                    }
+                    console.log(`👥 User pages to fetch: ${userTotalPages ?? 'unknown (using item-count stop)'}`)
+                }
+
+                console.log(`👥 Fetched page ${userPage}: ${users.length} users (total so far: ${allUsers.length})`)
+
+                // Three independent stop conditions — any one is sufficient
+                const reachedTotalPages = userTotalPages !== null && userPage >= userTotalPages
+                const pageNotFull = users.length < 250
+                const noItems = users.length === 0
+
+                if (reachedTotalPages || pageNotFull || noItems) {
+                    console.log(`👥 User fetch complete. Reason: ${
+                        noItems ? 'empty page' :
+                        pageNotFull ? `partial page (${users.length}/250)` :
+                        `reached total pages (${userTotalPages})`
+                    }`)
+                    break
+                }
+
+                userPage++
+                if (userPage > 100) { console.warn('⚠️ Safety limit: stopping user fetch at 100 pages'); break }
+                await new Promise(r => setTimeout(r, 150))
+            }
+
+            console.log(`👥 Total users fetched: ${allUsers.length} across ${userPage} page(s) (of ${userTotalPages ?? '?'} total)`)
+            rawUserCache = allUsers
+
+            // Build lookup map and attach user to each enrollment
+            const userMap = new Map(allUsers.map(u => [String(u.id), u]))
+            let noUserCount = 0
+            allEnrollments.forEach(e => {
+                const u = userMap.get(String(e.user_id))
+                if (u) { e.user = u } else { noUserCount++ }
             })
+            if (noUserCount > 0) {
+                console.warn(`⚠️ ${noUserCount} enrollments had no matching user (deleted/deactivated Thinkific accounts)`)
+            }
+
+            // Filter to WL101 by course name — catches bundle enrollments that course_id filter misses
+            const wl101Enrollments = allEnrollments.filter(e => {
+                const name = (e.course_name || e.product_name || '').toLowerCase()
+                return (
+                    name.includes('leadership 101') ||
+                    name.includes('wl101') ||
+                    name.includes('watoto leadership')
+                )
+            })
+
+            // Safety: if name filter yields 0, fall back to all enrollments and warn
+            const toProcess = wl101Enrollments.length > 0 ? wl101Enrollments : allEnrollments
+            if (wl101Enrollments.length === 0) {
+                console.warn(`⚠️ Course name filter returned 0 — using all ${allEnrollments.length} enrollments`)
+                console.warn('⚠️ Check that enrollment records include a course_name field matching "Leadership 101"')
+            }
+
+            const processed = toProcess.map(processEnrollment).filter(Boolean)
 
             // Persist to DB
             for (const student of processed) {
                 try { await upsertStudent(student) } catch (e) { console.warn('Upsert error:', e.message) }
             }
 
-            // Strip internal raw fields for in-memory
-            cache.data = processed.map(({ _rawUser, _rawEnrollment, ...s }) => s)
-            cache.timestamp = Date.now()
+            // Strip internal raw fields for in-memory storage
+            const cleaned = processed.map(({ _rawEnrollment, ...s }) => s)
+            if (isIncremental && cache.data && cache.data.length > 0) {
+                // Merge: update changed students, preserve others
+                const existing = new Map(cache.data.map(s => [String(s.userId), s]))
+                for (const s of cleaned) existing.set(String(s.userId), s)
+                cache.data = [...existing.values()]
+            } else {
+                cache.data = cleaned
+            }
+
+            // Re-apply manual campus overrides so assignments survive full syncs
+            const overrides = await getCampusOverrides()
+            if (Object.keys(overrides).length > 0) {
+                cache.data = cache.data.map(s =>
+                    overrides[String(s.userId)]
+                        ? { ...s, celebration_point: overrides[String(s.userId)], campusOverridden: true }
+                        : s
+                )
+            }
+
+            cache.timestamp     = Date.now()
             cache.lastSyncSuccess = Date.now()
+            cache.syncError     = null
             saveCache()
-            const unknownCount = processed.filter(s => s.celebration_point === 'Unknown').length
-            console.log(`✅ Sync complete: ${processed.length} students total. ${unknownCount} with unrecognized campus ('Unknown').`)
+
+            // Fix 1: Persist sync timestamp for incremental mode on next run
+            if (!isIncremental) {
+                const upsertTs = IS_POSTGRES
+                    ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value"
+                    : "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)"
+                await dbRun(upsertTs, ['thinkific_last_full_sync', String(cache.timestamp)]).catch(() => {})
+            }
+
+            const dropped       = toProcess.length - processed.length
+            const unknownCampus = processed.filter(s => s.celebration_point === 'Unknown').length
+
+            console.log(`✅ Thinkific sync complete:
+  Total fetched:      ${allEnrollments.length}
+  WL101 filtered:     ${wl101Enrollments.length}
+  Processed:          ${processed.length}
+  Dropped (invalid):  ${dropped}
+  Unknown campus:     ${unknownCampus}`)
+
+            await saveSyncReport({
+                timestamp: cache.timestamp,
+                rawFetched: allEnrollments.length,
+                wl101Count: wl101Enrollments.length,
+                processed: processed.length,
+                dropped,
+                unknownCampus,
+            })
+
         } catch (error) {
             console.error('❌ Sync failed:', error.message, error.response?.data || '')
             cache.syncError = error.message
+            // Never clear cache.data on failure — keep serving last known good data
         } finally {
             cache.isSyncing = false
             refreshPromise = null
@@ -361,47 +615,82 @@ export function getStudentProgress(id) {
 }
 
 export async function preWarmCache() {
-    // Priority: DB → file cache → background refresh
-    const fromDB = await loadCacheFromDB()
-    if (!fromDB) {
-        // Load file cache and use file modification time as the sync timestamp
-        try {
-            if (fs.existsSync(CACHE_FILE)) {
-                const stats = fs.statSync(CACHE_FILE)
-                const saved = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
-                if (saved.data && Array.isArray(saved.data) && saved.data.length > 0) {
-                    cache = { ...cache, ...saved, duration: cache.duration }
-                    // Always use file mtime so status pill shows a real age instead of "Not synced"
-                    if (!cache.timestamp || cache.timestamp === 0) {
-                        cache.timestamp = stats.mtimeMs
-                        cache.lastSyncSuccess = stats.mtimeMs
-                    }
-                    const ageMin = Math.round((Date.now() - stats.mtimeMs) / 60000)
-                    console.log(`✅ Cache loaded from disk: ${saved.data.length} students, age: ${ageMin}min`)
+    console.log('🔥 Pre-warming Thinkific cache...')
+    let fileAgeMs = Infinity
+    try {
+        if (fs.existsSync(CACHE_FILE)) {
+            const stats = fs.statSync(CACHE_FILE)
+            fileAgeMs = Date.now() - stats.mtimeMs
+            const raw    = fs.readFileSync(CACHE_FILE, 'utf8')
+            const parsed = JSON.parse(raw)
+
+            // Support both {data:[]} and raw array formats
+            const data = Array.isArray(parsed) ? parsed : (parsed.data || [])
+            if (data.length > 0) {
+                cache.data = data
+                cache.timestamp       = stats.mtimeMs // use file mtime — fixes "Not synced" display
+                cache.lastSyncSuccess = stats.mtimeMs
+
+                // Apply campus overrides immediately so boot state is correct
+                const overrides = await getCampusOverrides()
+                if (Object.keys(overrides).length > 0) {
+                    cache.data = cache.data.map(s =>
+                        overrides[String(s.userId)]
+                            ? { ...s, celebration_point: overrides[String(s.userId)], campusOverridden: true }
+                            : s
+                    )
+                }
+
+                console.log(`✅ Cache loaded from disk: ${data.length} students (${Math.floor(fileAgeMs / 60000)}min old)`)
+
+                if (fileAgeMs < 10 * 60_000) {
+                    // Fresh enough — sync in background after 30s to avoid hammering API on boot
+                    setTimeout(() => doRefresh().catch(console.error), 30_000)
+                    return
                 }
             }
-        } catch (e) {
-            console.warn('⚠️ preWarmCache file load error:', e.message)
+        }
+    } catch (e) {
+        console.warn('⚠️ preWarmCache error:', e.message)
+    }
+
+    // Try DB as fallback if file was missing/stale/empty
+    if (!cache.data || cache.data.length === 0) {
+        const fromDB = await loadCacheFromDB()
+        if (fromDB) {
+            const overrides = await getCampusOverrides()
+            if (Object.keys(overrides).length > 0) {
+                cache.data = cache.data.map(s =>
+                    overrides[String(s.userId)]
+                        ? { ...s, celebration_point: overrides[String(s.userId)], campusOverridden: true }
+                        : s
+                )
+            }
         }
     }
-    if (!cache.data || cache.data.length === 0 || (Date.now() - cache.timestamp > cache.duration)) {
-        triggerRefresh()
-    }
+
+    // Stale or missing — sync immediately but non-blocking
+    doRefresh().catch(err => console.error('❌ Boot sync failed:', err.message))
 }
 
 export function getCacheStatus() {
     const ts = cache.lastSyncSuccess || cache.timestamp || null
+    const students = cache.data || []
     return {
         isLoaded: !!cache.data,
-        studentCount: cache.data?.length || 0,
-        cacheSize: cache.data?.length || 0,
+        studentCount: students.length,
+        cacheSize: students.length,
         // Fields the frontend SyncPill reads:
         lastSync: ts,
         syncing: cache.isSyncing || false,
         error: cache.syncError || null,
         isStale: ts ? (Date.now() - ts) > cache.duration : true,
         ageMinutes: ts ? Math.floor((Date.now() - ts) / 60000) : null,
-        // Legacy fields kept for diagnostics page:
+        // Data quality metrics (populated after first sync):
+        unknownCount: students.filter(s => !s.name || s.name === 'Unknown').length,
+        unknownCampusCount: students.filter(s => s.celebration_point === 'Unknown').length,
+        droppedCount: rawEnrollmentCount > 0 ? rawEnrollmentCount - students.length : null,
+        // Legacy fields for diagnostics page:
         lastSyncSuccess: cache.lastSyncSuccess,
         lastSyncAttempt: cache.lastSyncAttempt,
         syncError: cache.syncError,
@@ -419,9 +708,13 @@ export function searchStudents(query, celebrationPoint = null) {
     
     if (query) {
         const q = query.toLowerCase()
-        results = results.filter(s => 
-            (s.name && s.name.toLowerCase().includes(q)) || 
-            (s.email && s.email.toLowerCase().includes(q))
+        results = results.filter(s =>
+            (s.name && s.name.toLowerCase().includes(q)) ||
+            (s.firstName && s.firstName.toLowerCase().includes(q)) ||
+            (s.lastName && s.lastName.toLowerCase().includes(q)) ||
+            (s.email && s.email.toLowerCase().includes(q)) ||
+            (s.email && s.email.split('@')[0].toLowerCase().includes(q)) ||
+            (s.userId && String(s.userId).includes(q))
         )
     }
     
@@ -544,6 +837,166 @@ export async function updateUser(userId, data) {
 
 export function forceRefresh() {
     return doRefresh()
+}
+
+export async function getCampusOverrides() {
+    try {
+        const rows = await dbAll('SELECT thinkific_user_id, campus FROM student_campus_overrides')
+        return Object.fromEntries(rows.map(r => [r.thinkific_user_id, r.campus]))
+    } catch (_) {
+        return {}
+    }
+}
+
+export async function updateStudentCampus(thinkificUserId, campus) {
+    const id = String(thinkificUserId)
+    if (cache.data) {
+        const student = cache.data.find(s => String(s.userId) === id)
+        if (student) {
+            student.campus = campus
+            student.celebration_point = campus
+            student.campusOverridden = true
+        }
+    }
+    try {
+        const sql = IS_POSTGRES
+            ? 'UPDATE thinkific_students SET celebration_point=$1 WHERE thinkific_user_id=$2'
+            : 'UPDATE thinkific_students SET celebration_point=? WHERE thinkific_user_id=?'
+        await dbRun(sql, [campus, id])
+    } catch (e) {
+        console.warn('[thinkific] updateStudentCampus DB error:', e.message)
+    }
+}
+
+function persistCacheAsync() {
+    setImmediate(() => {
+        try {
+            fs.writeFileSync(CACHE_FILE, JSON.stringify(cache), 'utf8')
+        } catch (e) {
+            console.warn('⚠️ Async cache persist failed:', e.message)
+        }
+    })
+}
+
+// processFullUser — fetch user + enrollments from Thinkific API and insert into cache + DB.
+// Used by updateSingleStudent when allowInsert=true and the user is not already in cache.
+async function processFullUser(userId) {
+    try {
+        const client = await createClient()
+        const [userRes, enrollRes] = await Promise.all([
+            client.get(`/users/${userId}`),
+            client.get('/enrollments', { params: { 'query[user_id]': userId, limit: 10 }, timeout: 20000 })
+        ])
+        const user = userRes.data
+        const enrollments = enrollRes.data?.items || []
+
+        const wl101 = enrollments.find(e => {
+            const name = (e.course_name || e.product_name || '').toLowerCase()
+            return name.includes('leadership 101') || name.includes('wl101') || name.includes('watoto leadership')
+        })
+        if (!wl101) {
+            console.log(`📡 processFullUser: user ${userId} has no WL101 enrollment — skipping`)
+            return null
+        }
+
+        wl101.user = user
+        const student = processEnrollment(wl101)
+        if (!student) return null
+
+        const { _rawEnrollment, ...clean } = student
+        cache.data = cache.data || []
+        const idx = cache.data.findIndex(s => String(s.userId) === String(userId))
+        if (idx === -1) {
+            cache.data.push(clean)
+        } else {
+            cache.data[idx] = clean
+        }
+        cache.timestamp = Date.now()
+        persistCacheAsync()
+
+        try { await upsertStudent(student) } catch (e) { console.warn('[thinkific] processFullUser upsert error:', e.message) }
+        console.log(`✅ processFullUser: inserted student ${clean.name} (userId=${userId})`)
+        return clean
+    } catch (e) {
+        console.warn(`⚠️ processFullUser(${userId}) failed:`, e.message)
+        return null
+    }
+}
+
+// updateSingleStudent — update one student in-memory from a webhook payload without full refresh.
+// enrollmentData: the enrollment resource object from the webhook (progress, status, etc.)
+// userData: the user resource object from the webhook (name, email, company, etc.)
+// options.fromWebhook: use synchronous cache write (prevents data loss if process restarts)
+// options.allowInsert: if user not in cache, fetch from API and insert (for user.created events)
+export async function updateSingleStudent(userId, enrollmentData = null, userData = null, options = {}) {
+    if (!cache.data) return
+    const userIdStr = String(userId)
+    const idx = cache.data.findIndex(s => String(s.userId) === userIdStr)
+    if (idx === -1) {
+        if (options.allowInsert) {
+            console.log(`📡 updateSingleStudent: user ${userId} not in cache — inserting via processFullUser`)
+            await processFullUser(userId)
+            return
+        }
+        console.log(`📡 updateSingleStudent: user ${userId} not in cache — scheduling refresh`)
+        scheduleDebounceRefresh()
+        return
+    }
+
+    const existing = { ...cache.data[idx] }
+
+    if (enrollmentData) {
+        const rawProgress = parseFloat(enrollmentData.percentage_completed) || 0
+        const progress = rawProgress <= 1.0 ? Math.round(rawProgress * 100) : Math.round(rawProgress)
+        existing.progress = progress
+        existing.percentage_completed = progress
+        existing.lastActivity = enrollmentData.updated_at || existing.lastActivity
+        const risk = calculateRiskScore({ last_sign_in_at: existing.last_sign_in_at }, enrollmentData)
+        existing.risk_score = risk.score
+        existing.risk_category = risk.category
+        existing.risk = risk
+    }
+
+    if (userData) {
+        const firstName = (userData.first_name || '').trim()
+        const lastName  = (userData.last_name  || '').trim()
+        const fullName  = [firstName, lastName].filter(Boolean).join(' ')
+        if (fullName) { existing.name = fullName; existing.firstName = firstName; existing.lastName = lastName }
+        if (userData.email) existing.email = userData.email.toLowerCase().trim()
+        if (userData.company && !existing.campusOverridden) {
+            const newCampus = normalizeCelebrationPoint(userData.company)
+            existing.campus = newCampus
+            existing.celebration_point = newCampus
+        }
+        if (userData.last_sign_in_at) existing.last_sign_in_at = userData.last_sign_in_at
+    }
+
+    cache.data = [...cache.data]
+    cache.data[idx] = existing
+    cache.timestamp = Date.now()
+    if (options.fromWebhook) {
+        saveCacheSync()
+    } else {
+        persistCacheAsync()
+    }
+
+    try {
+        const sql = IS_POSTGRES
+            ? 'UPDATE thinkific_students SET progress=$1, celebration_point=$2, enrollment_status=$3, risk_score=$4, risk_category=$5, updated_at=NOW() WHERE thinkific_user_id=$6'
+            : 'UPDATE thinkific_students SET progress=?, celebration_point=?, enrollment_status=?, risk_score=?, risk_category=?, updated_at=CURRENT_TIMESTAMP WHERE thinkific_user_id=?'
+        await dbRun(sql, [existing.progress, existing.celebration_point, existing.status, existing.risk_score, existing.risk_category, userIdStr])
+    } catch (e) {
+        console.warn('[thinkific] updateSingleStudent DB error:', e.message)
+    }
+}
+
+let debounceTimer = null
+export function scheduleDebounceRefresh(delayMs = 30000) {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        doRefresh().catch(() => {})
+    }, delayMs)
 }
 
 export async function processWebhookPayload(topic, payload) {

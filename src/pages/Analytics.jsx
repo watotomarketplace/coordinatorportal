@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/appStore'
 import api from '../lib/api'
+import menuBus from '../lib/menuBus.js'
 import { BarChart3, TrendingUp, Users, Calendar } from 'lucide-react'
 import {
   Chart as ChartJS,
@@ -28,6 +29,12 @@ export default function Analytics() {
       finally { setLoading(false) }
     }
     load()
+  }, [])
+
+  useEffect(() => {
+    return menuBus.on('analytics:scroll', ({ section }) =>
+      document.getElementById('analytics-' + section)?.scrollIntoView({ behavior: 'smooth' })
+    )
   }, [])
 
   if (loading) return <div style={{ padding: 24 }}>{[0,1,2].map(i => <div key={i} className="skeleton skeleton-row" style={{ height: 200 }} />)}</div>

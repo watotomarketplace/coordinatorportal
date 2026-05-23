@@ -51,6 +51,7 @@ export default function App() {
   const setPlatform = useAppStore(s => s.setPlatform)
   const theme = useAppStore(s => s.theme)
   const location = useLocation()
+  const [serverDown, setServerDown] = useState(false)
 
   const loadWallpaper = useAppStore(s => s.loadWallpaper)
 
@@ -58,6 +59,13 @@ export default function App() {
   useEffect(() => {
     checkSession()
   }, [checkSession])
+
+  // Listen for connection-refused events dispatched by the axios interceptor in src/lib/api.js
+  useEffect(() => {
+    function handleConnectionRefused() { setServerDown(true) }
+    window.addEventListener('api:connection-refused', handleConnectionRefused)
+    return () => window.removeEventListener('api:connection-refused', handleConnectionRefused)
+  }, [])
 
   // Load wallpaper when authenticated
   useEffect(() => {
@@ -87,12 +95,27 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize)
   }, [platform, setPlatform])
 
+  const serverDownBanner = serverDown && (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+      background: '#dc2626', color: '#fff', padding: '10px 16px',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      fontSize: 14, fontWeight: 500, gap: 12
+    }}>
+      <span>Cannot reach server — check that the backend is running on port {window.location.port || 3000}.</span>
+      <button onClick={() => setServerDown(false)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 6, color: '#fff', padding: '2px 10px', cursor: 'pointer', fontSize: 13 }}>Dismiss</button>
+    </div>
+  )
+
   // Show login page without layout
   if (location.pathname === '/login') {
     return (
-      <Routes>
-        <Route path="/login" element={<Login />} />
-      </Routes>
+      <>
+        {serverDownBanner}
+        <Routes>
+          <Route path="/login" element={<Login />} />
+        </Routes>
+      </>
     )
   }
 
@@ -102,6 +125,7 @@ export default function App() {
 
   return (
     <ProtectedRoute>
+      {serverDownBanner}
       <Layout>
         <Suspense fallback={<LoadingFallback />}>
           <Routes>

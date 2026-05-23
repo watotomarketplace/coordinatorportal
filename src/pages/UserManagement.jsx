@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import { getUsers } from '../lib/api'
@@ -8,6 +8,7 @@ import {
   UserPlus, Trash2, Edit, ChevronRight, X, Check
 } from 'lucide-react'
 import { CELEBRATION_POINTS } from '../constants/campuses'
+import menuBus from '../lib/menuBus.js'
 
 const ALL_ROLES = ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
 const ROLES = ALL_ROLES  // alias kept for sidebar/filter usage
@@ -16,7 +17,7 @@ function getAllowedRolesForActor(actor) {
   if (!actor) return []
   const role = actor.role
   if (role === 'Admin') return ALL_ROLES
-  if (role === 'Pastor') return ['Coordinator', 'Facilitator', 'CoFacilitator']
+  if (role === 'Pastor') return ['Coordinator', 'Facilitator', 'CoFacilitator', 'TechSupport']
   if (['TechSupport', 'Coordinator'].includes(role)) return ['Facilitator', 'CoFacilitator']
   return []
 }
@@ -213,6 +214,7 @@ function UserModal({ onClose, onSaved, userToEdit = null }) {
 
 export default function UserManagement() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
+  const setMenuBarContext = useAppStore(s => s.setMenuBarContext)
   const platform = useAppStore(s => s.platform)
   const hasRole = useAuthStore(s => s.hasRole)
   const currentUser = useAuthStore(s => s.user)
@@ -256,6 +258,26 @@ export default function UserManagement() {
     ROLES.forEach(r => { counts[r] = users.filter(u => u.role === r).length })
     return counts
   }, [users])
+
+  const filteredRef = useRef([])
+  filteredRef.current = filtered
+
+  useEffect(() => {
+    setMenuBarContext('selectedUser', selectedUser ?? null)
+  }, [selectedUser, setMenuBarContext])
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('users:new', () => { setEditingUser(null); setShowModal(true) }),
+      menuBus.on('users:filter-role', ({ role }) => setRoleFilter(role ?? 'All')),
+      menuBus.on('users:edit', ({ user }) => { setEditingUser(user); setShowModal(true) }),
+      menuBus.on('users:toggle-active', ({ user }) => {
+        if (user) api.put(`/api/admin/users/${user.id}`, { active: !user.active })
+          .then(() => loadUsers()).catch(() => {})
+      }),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this user?')) return

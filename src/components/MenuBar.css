@@ -1,0 +1,434 @@
+/* ═══════════════════════════════════════════════════
+   MENU BAR — macOS Tahoe style
+   All values reference existing CSS custom properties
+═══════════════════════════════════════════════════ */
+
+.menu-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 28px;
+    padding: 0 8px;
+    background: var(--chrome-bg);
+    backdrop-filter: var(--chrome-blur);
+    -webkit-backdrop-filter: var(--chrome-blur);
+    border-bottom: 1px solid var(--border-subtle);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 99999;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-app-region: no-drag;
+}
+
+.menu-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 100%;
+}
+
+.menu-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+}
+
+/* ─── Trigger Button ──────────────────────────────── */
+.menu-trigger {
+    position: relative;
+    height: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.menu-trigger-btn {
+    height: 100%;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: -0.1px;
+    cursor: default;
+    border-radius: 4px;
+    transition: background 0.1s ease;
+    white-space: nowrap;
+}
+
+.menu-trigger--app .menu-trigger-btn {
+    font-weight: 600;
+}
+
+.menu-trigger-btn:hover,
+.menu-trigger--open .menu-trigger-btn {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+/* ─── Dropdown Panel ──────────────────────────────── */
+.menu-dropdown {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: 220px;
+    max-width: 280px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 2px 8px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 var(--border-subtle);
+    padding: 4px 0;
+    z-index: 100000;
+    animation: menuDropIn 0.1s cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: visible;
+}
+
+.menu-dropdown--right {
+    left: auto;
+    right: 0;
+}
+
+@keyframes menuDropIn {
+    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── Menu Items ──────────────────────────────────── */
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 12px 5px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 400;
+    cursor: default;
+    text-align: left;
+    border-radius: 0;
+    transition: background 0.08s ease;
+    min-height: 22px;
+    white-space: nowrap;
+}
+
+.menu-item:hover {
+    background: var(--accent);
+    color: #ffffff;
+}
+
+.menu-item:hover .menu-item-icon svg {
+    color: #ffffff;
+}
+
+.menu-item--disabled {
+    color: var(--text-muted);
+    cursor: default;
+    pointer-events: none;
+}
+
+.menu-item--danger { color: var(--danger); }
+.menu-item--danger:hover { background: var(--danger); color: #ffffff; }
+
+.menu-item-icon {
+    width: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
+.menu-item:hover .menu-item-icon { color: #ffffff; }
+
+.menu-item-label { flex: 1; }
+
+.menu-item-shortcut {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.02em;
+    font-family: var(--font-ui);
+    margin-left: auto;
+    padding-left: 16px;
+}
+
+.menu-item:hover .menu-item-shortcut { color: rgba(255,255,255,0.6); }
+
+/* ─── Section Header ──────────────────────────────── */
+.menu-section-header {
+    padding: 4px 12px 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+/* ─── Separator ──────────────────────────────────── */
+.menu-separator {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 0;
+}
+
+/* ─── Submenu ─────────────────────────────────────── */
+.menu-submenu { position: relative; }
+
+.menu-item--has-submenu { padding-right: 8px; }
+
+.menu-submenu-chevron {
+    margin-left: auto;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.menu-submenu-panel {
+    display: none;
+    position: absolute;
+    top: -4px;
+    left: 100%;
+    min-width: 180px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    padding: 4px 0;
+    z-index: 100001;
+    animation: menuDropIn 0.1s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.menu-submenu:hover .menu-submenu-panel { display: block; }
+
+.menu-submenu:hover > .menu-item {
+    background: var(--accent);
+    color: #ffffff;
+}
+
+.menu-submenu:hover > .menu-item .menu-item-icon { color: #ffffff; }
+.menu-submenu:hover > .menu-item .menu-submenu-chevron { color: rgba(255,255,255,0.7); }
+
+/* ─── Check Item ──────────────────────────────────── */
+.menu-check-active {
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+}
+.menu-check-empty {
+    display: inline-block;
+    width: 13px;
+}
+.menu-item--check:hover .menu-check-active { color: #ffffff; }
+.menu-item--check[aria-checked="true"] .menu-check-active { color: var(--accent); }
+.menu-item--check:hover[aria-checked="true"] .menu-check-active { color: #ffffff; }
+
+/* ─── Right Side ──────────────────────────────────── */
+.menu-bar-status-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: var(--r-full);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-ui);
+    cursor: default;
+    transition: background 0.15s ease;
+    white-space: nowrap;
+    border: none;
+    background: transparent;
+}
+
+.menu-bar-status-pill:hover { background: var(--bg-hover); }
+.menu-bar-status-pill--fresh   { color: var(--success); }
+.menu-bar-status-pill--stale   { color: var(--warning); }
+.menu-bar-status-pill--error   { color: var(--danger); }
+.menu-bar-status-pill--syncing { color: var(--info); }
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+.menu-bar-status-pill--syncing svg { animation: spin 1s linear infinite; }
+
+.menu-bar-bell-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: default;
+    transition: all 0.1s ease;
+}
+
+.menu-bar-bell-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.menu-bar-bell-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    background: var(--danger);
+    border-radius: var(--r-full);
+    border: 1.5px solid var(--bg-app);
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-ui);
+}
+
+.menu-bar-user-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px 2px 4px;
+    border-radius: var(--r-full);
+    cursor: default;
+    transition: background 0.1s ease;
+    border: none;
+    background: transparent;
+}
+
+.menu-bar-user-pill:hover { background: var(--bg-hover); }
+
+.menu-bar-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.menu-bar-avatar-initials {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent-gradient);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+}
+
+.menu-bar-username {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── Notification dropdown ───────────────────────── */
+.menu-bar-notif-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: -60px;
+    width: 320px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    z-index: 100000;
+    animation: menuDropIn 0.1s cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
+}
+
+.menu-bar-notif-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.menu-bar-notif-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: default;
+    transition: background 0.1s;
+}
+
+.menu-bar-notif-item:hover { background: var(--bg-hover); }
+
+.menu-bar-notif-item:last-child { border-bottom: none; }
+
+.menu-bar-notif-msg {
+    font-size: 12px;
+    color: var(--text-primary);
+    line-height: 1.45;
+    margin-bottom: 3px;
+}
+
+.menu-bar-notif-time {
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.menu-bar-notif-empty {
+    padding: 24px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* ─── User pill dropdown ──────────────────────────── */
+.menu-bar-user-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 220px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    z-index: 100000;
+    animation: menuDropIn 0.1s cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
+}
+
+.menu-bar-user-info {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.menu-bar-user-info-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.menu-bar-user-info-role {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}

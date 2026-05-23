@@ -27,12 +27,13 @@ import diagnosticRoutes from './routes/diagnostics.js'
 import userPreferencesRoutes from './routes/user-preferences.js'
 import dashboardSummaryRoutes from './routes/dashboard-summary.js'
 import dashboardAllRoutes from './routes/dashboard-all.js'
-import { initDatabase } from './db/init.js'
+import { initDatabase, IS_POSTGRES, getDatabase } from './db/init.js'
 import { preWarmCache, getCacheStatus } from './services/thinkific.js'
 import { initScheduler } from './services/scheduler.js'
 import { initializeCronJobs } from './queue/index.js'
 import queueRoutes from './routes/queue.js'
 import webhookRoutes from './routes/webhooks.js'
+import campusOverrideRoutes from './routes/campus-overrides.js'
 import compression from 'compression'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -40,6 +41,7 @@ const __dirname = dirname(__filename)
 
 const app = express()
 const PORT = process.env.PORT || 3000
+const HOST = process.env.HOST || '0.0.0.0'
 
 // ── Security headers (Helmet) ─────────────────────────────────────────────────
 app.use(helmet({
@@ -88,6 +90,10 @@ app.use(compression())
 // Serve Profile Images
 app.use('/profile-images', express.static(join(__dirname, '../Profile Images')))
 
+// Webhook route must be mounted with express.raw() BEFORE express.json() so HMAC verification
+// receives the raw request body (JSON middleware would consume it first).
+app.use('/api/webhooks', express.raw({ type: 'application/json' }), webhookRoutes)
+
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
@@ -105,6 +111,15 @@ if (process.env.REDIS_URL) {
     console.log('✅ Redis session store active')
   } catch (e) {
     console.warn('⚠️ Redis session store failed, falling back to memory store:', e.message)
+  }
+} else if (IS_POSTGRES) {
+  try {
+    const { default: connectPgSimple } = await import('connect-pg-simple')
+    const PgStore = connectPgSimple(session)
+    sessionStore = new PgStore({ pool: getDatabase(), tableName: 'session', createTableIfMissing: true })
+    console.log('✅ PostgreSQL session store active')
+  } catch (e) {
+    console.warn('⚠️ PG session store failed, falling back to memory store:', e.message)
   }
 } else {
   console.log('ℹ️  No REDIS_URL — using in-memory session store (dev only)')
@@ -142,7 +157,7 @@ app.use('/api/exports', exportRoutes)
 app.use('/api/diagnostics', diagnosticRoutes)
 app.use('/api/user/preferences', userPreferencesRoutes)
 app.use('/api/queue', queueRoutes)
-app.use('/api/webhooks', webhookRoutes)
+app.use('/api/campus-overrides', campusOverrideRoutes)
 app.use('/api/public', imageRoutes)
 app.use('/api/dashboard/all', dashboardAllRoutes)
 app.use('/api/dashboard', dashboardSummaryRoutes)
@@ -189,7 +204,10 @@ app.use((err, req, res, next) => {
     res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`)
-    console.log(`📊 Dashboard API available at http://localhost:${PORT}/api`)
+const server = app.listen(PORT, HOST, () => {
+    const addr = server.address()
+    const displayHost = addr.address === '0.0.0.0' ? 'localhost' : addr.address
+    console.log(`🚀 Server running on http://${displayHost}:${addr.port}`)
+    console.log(`📊 Dashboard API available at http://localhost:${addr.port}/api`)
+    console.log(`🔌 Bound to ${addr.address}:${addr.port}`)
 })

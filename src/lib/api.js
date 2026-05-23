@@ -25,6 +25,12 @@ api.interceptors.response.use(
     if (err.response?.status === 401) {
       window.location.href = '/login'
     }
+    // No response at all = server unreachable (ERR_CONNECTION_REFUSED, network down, etc.)
+    if (!err.response) {
+      window.dispatchEvent(new CustomEvent('api:connection-refused', {
+        detail: { url: err.config?.url, message: err.message }
+      }))
+    }
     return Promise.reject(err)
   }
 )

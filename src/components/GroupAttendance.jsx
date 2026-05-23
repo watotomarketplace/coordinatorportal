@@ -56,6 +56,27 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
         setTimeout(() => setToast(null), 3000)
     }
 
+    // Roles that can remove members from a group
+    const canRemoveMembers = currentUser && !['LeadershipTeam', 'Pastor'].includes(currentUser.role)
+
+    const handleRemoveMember = async (memberId) => {
+        if (!confirm('Remove this member from the group? They can be re-added later via the Formation Groups page.')) return
+        try {
+            const res = await fetch(`/api/attendance/group/${groupId}/members/${memberId}`, {
+                method: 'DELETE', credentials: 'include'
+            })
+            const data = await res.json()
+            if (data.success) {
+                setMembers(prev => prev.filter(m => m.id !== memberId))
+                showToast('Member removed from group', 'success')
+            } else {
+                showToast(data.message || 'Failed to remove member', 'error')
+            }
+        } catch {
+            showToast('Failed to remove member', 'error')
+        }
+    }
+
     const fetchData = useCallback(async () => {
         if (!groupId) return
         setLoading(true)
@@ -212,6 +233,22 @@ export default function GroupAttendance({ groupId, groupName, currentUser }) {
                                         )}
                                     </div>
                                     {sum && sum.totalSessions > 0 && <AttendanceRing percentage={pct} size={36} />}
+                                    {canRemoveMembers && (
+                                        <button
+                                            onClick={e => { e.stopPropagation(); handleRemoveMember(m.id) }}
+                                            title="Remove from group"
+                                            style={{
+                                                background: 'rgba(255,59,48,0.12)', border: '1px solid rgba(255,59,48,0.25)',
+                                                borderRadius: 6, padding: '3px 9px', fontSize: 11,
+                                                color: 'rgba(255,100,90,0.8)', cursor: 'pointer', flexShrink: 0,
+                                                transition: 'all 0.15s',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,59,48,0.22)'; e.currentTarget.style.color = '#ff7675' }}
+                                            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,59,48,0.12)'; e.currentTarget.style.color = 'rgba(255,100,90,0.8)' }}
+                                        >
+                                            Remove
+                                        </button>
+                                    )}
                                 </div>
                             )
                         })}

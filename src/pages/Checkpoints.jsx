@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import api from '../lib/api'
+import menuBus from '../lib/menuBus.js'
 import { Target, CheckCircle, Clock, AlertCircle, Edit2, X, Save } from 'lucide-react'
 
 function EditCheckpointModal({ checkpoint, onClose, onSaved }) {
@@ -101,6 +102,18 @@ export default function Checkpoints() {
       finally { setLoading(false) }
     }
     load()
+  }, [])
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('checkpoints:generate', () => {
+        api.post('/api/checkpoints/generate')
+          .then(() => api.get('/api/checkpoints'))
+          .then(d => setCheckpoints(d.checkpoints || d || []))
+          .catch(() => {})
+      }),
+    ]
+    return () => unsubs.forEach(u => u())
   }, [])
 
   const handleSaved = (updated) => {

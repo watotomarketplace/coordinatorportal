@@ -9,13 +9,15 @@
  */
 import axios from 'axios'
 import { dbRun, dbGet } from '../db/init.js'
+import { getThinkificCredentials } from './thinkific-common.js'
 
-function createClient() {
+async function createClient() {
+    const { apiKey, subdomain } = await getThinkificCredentials()
     return axios.create({
         baseURL: 'https://api.thinkific.com/api/public/v1',
         headers: {
-            'X-Auth-API-Key': process.env.THINKIFIC_API_KEY,
-            'X-Auth-Subdomain': process.env.THINKIFIC_SUBDOMAIN,
+            'X-Auth-API-Key': apiKey,
+            'X-Auth-Subdomain': subdomain,
             'Content-Type': 'application/json'
         },
         timeout: 15000
@@ -30,7 +32,7 @@ function createClient() {
  * @returns {object} { success, user, error }
  */
 export async function updateUserName(thinkificUserId, nameData, actor) {
-    const client = createClient()
+    const client = await createClient()
 
     try {
         // Fetch current user data first (for audit trail)
@@ -109,7 +111,7 @@ export async function updateUserName(thinkificUserId, nameData, actor) {
  * email the user or show the temp password to Tech Support.
  */
 export async function resetUserPassword(thinkificUserId, actor) {
-    const client = createClient()
+    const client = await createClient()
 
     try {
         // Fetch current user info
@@ -193,7 +195,7 @@ function generateTempPassword() {
  * Look up a Thinkific user by ID
  */
 export async function getThinkificUser(thinkificUserId) {
-    const client = createClient()
+    const client = await createClient()
     try {
         const res = await client.get(`/users/${thinkificUserId}`)
         return { success: true, user: res.data }

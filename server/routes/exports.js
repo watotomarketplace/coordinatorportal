@@ -65,6 +65,9 @@ router.get('/campus/roster', requireAuth, applyCampusScope, async (req, res) => 
         const campus = req.query.celebration_point || req.scopedCelebrationPoint || (!isGlobal ? user.celebration_point : null)
         const data = await getStudentData(campus)
         const students = data.students || []
+        if (!Array.isArray(students) || (students.length === 0 && !data.lastUpdated)) {
+            return res.status(503).json({ success: false, message: 'Student data not yet available — try again shortly' })
+        }
 
         const columns = ['userId', 'first_name', 'last_name', 'email', 'celebration_point', 'course', 'progress', 'status', 'daysInactive', 'alertLevel', 'risk_score', 'risk_category', 'lastActivity', 'last_sign_in_at', 'enrolled_at']
         sendCSV(res, `roster_${campus || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, students, columns)
@@ -107,7 +110,11 @@ router.get('/campus/risk', requireAuth, applyCampusScope, async (req, res) => {
         const isGlobal = GLOBAL_ROLES.includes(user.role)
         const campus = req.query.celebration_point || req.scopedCelebrationPoint || (!isGlobal ? user.celebration_point : null)
         const data = await getStudentData(campus)
-        const atRisk = (data.students || []).filter(s =>
+        const students503 = data.students || []
+        if (!Array.isArray(students503) || (students503.length === 0 && !data.lastUpdated)) {
+            return res.status(503).json({ success: false, message: 'Student data not yet available — try again shortly' })
+        }
+        const atRisk = students503.filter(s =>
             (s.risk_score && s.risk_score >= 50) || s.daysInactive > 14
         ).sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
 

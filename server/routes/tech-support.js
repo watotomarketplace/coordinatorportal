@@ -5,6 +5,7 @@ import { requireAuth, requireAdminOrTechSupport } from '../middleware/rbac.js'
 import { updateUserName, resetUserPassword, getThinkificUser } from '../services/thinkific-writeback.js'
 import { dbAll, dbGet, dbRun, IS_POSTGRES } from '../db/init.js'
 import { sendPasswordResetEmail } from '../services/email.js'
+import { updateSingleStudent } from '../services/thinkific.js'
 
 const router = express.Router()
 
@@ -35,6 +36,10 @@ router.put('/name/:thinkificId', requireAuth, requireAdminOrTechSupport, async (
         )
 
         if (result.success) {
+            // Smart invalidation — update in-memory cache immediately so name change
+            // is reflected in the portal without waiting for the next cron sync
+            updateSingleStudent(req.params.thinkificId, null, { first_name, last_name }).catch(() => {})
+
             res.json({
                 success: true,
                 message: 'Name updated successfully',

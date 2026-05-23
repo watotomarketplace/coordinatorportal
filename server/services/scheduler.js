@@ -52,12 +52,29 @@ export async function initScheduler() {
     // 3. Fallback Thinkific Background Sync (if Redis isn't configured)
     if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
         console.log('⏰ Adding fallback node-cron Thinkific Sync (every 5 mins)')
+        let consecutiveFailures = 0
         const thinkificTask = cron.schedule(CRON_SCHEDULES.THINKIFIC_SYNC, async () => {
-            console.log('⏰ Running fallback Thinkific sync...')
+            console.log('⏰ Cron: Thinkific sync starting')
             try {
                 await forceRefresh()
+                if (consecutiveFailures > 0) {
+                    console.log(`✅ Thinkific sync recovered after ${consecutiveFailures} failure(s)`)
+                }
+                consecutiveFailures = 0
+                await dbRun(
+                    "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_success', ?)",
+                    [new Date().toISOString()]
+                )
             } catch (error) {
-                console.error('❌ Thinkific sync failed:', error)
+                consecutiveFailures++
+                console.error(`❌ Cron sync failed (${consecutiveFailures} consecutive):`, error.message)
+                await dbRun(
+                    "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_error', ?)",
+                    [JSON.stringify({ message: error.message, failures: consecutiveFailures, at: new Date().toISOString() })]
+                )
+                if (consecutiveFailures >= 3) {
+                    console.error(`🚨 ALERT: Thinkific sync has failed ${consecutiveFailures} times in a row — check API credentials and connectivity`)
+                }
             }
         })
         tasks.push(thinkificTask)

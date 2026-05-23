@@ -240,7 +240,13 @@ router.post('/', requireAuth, async (req, res) => {
 
         await invalidatePattern('cache:dashboard:*')
 
-        res.json({ success: true, id: result.lastID ?? result, week_number: targetWeek })
+        const reportId = result.lastInsertRowid || null
+        if (reportId) {
+            const { enqueueJob } = await import('../queue/index.js')
+            await enqueueJob('notion-create', { reportId }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 } })
+        }
+
+        res.json({ success: true, id: reportId ?? result, week_number: targetWeek })
     } catch (error) {
         console.error('POST /reports error:', error)
         res.status(500).json({ success: false, message: 'Failed to create report' })

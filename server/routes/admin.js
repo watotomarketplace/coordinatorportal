@@ -124,8 +124,8 @@ router.post('/users', requireUserManager, async (req, res) => {
             if (curIsCoordOrTech && !curIsPastor && !rolesList.every(r => r === 'Facilitator' || r === 'CoFacilitator')) {
                 return res.status(403).json({ success: false, message: 'You can only create Facilitator or Co-Facilitator accounts' })
             }
-            if (curIsPastor && !rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
-                return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator or Facilitator accounts' })
+            if (curIsPastor && !rolesList.every(r => ['Facilitator', 'Coordinator', 'CoFacilitator', 'TechSupport'].includes(r))) {
+                return res.status(403).json({ success: false, message: 'Pastors can only create Coordinator, Facilitator, Co-Facilitator, or TechSupport accounts' })
             }
         }
 
@@ -384,11 +384,12 @@ router.put('/users/:id', requireUserManager, async (req, res) => {
                     return res.status(403).json({ success: false, message: 'Cannot change role away from Facilitator/Co-Facilitator' })
                 }
             } else if (curIsPastor) {
-                if (!target || !tgtRoles.some(r => ['Facilitator', 'Coordinator'].includes(r)) || target.celebration_point !== currentUser.celebration_point) {
-                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator or Coordinator accounts at your campus' })
+                const PASTOR_EDITABLE = ['Facilitator', 'Coordinator', 'CoFacilitator', 'TechSupport']
+                if (!target || !tgtRoles.some(r => PASTOR_EDITABLE.includes(r)) || target.celebration_point !== currentUser.celebration_point) {
+                    return res.status(403).json({ success: false, message: 'You can only edit Facilitator, Coordinator, Co-Facilitator, or TechSupport accounts at your campus' })
                 }
-                if (!rolesList.every(r => ['Facilitator', 'Coordinator'].includes(r))) {
-                    return res.status(403).json({ success: false, message: 'Cannot elevate role outside of Facilitator/Coordinator' })
+                if (!rolesList.every(r => PASTOR_EDITABLE.includes(r))) {
+                    return res.status(403).json({ success: false, message: 'Cannot elevate role outside of Facilitator, Coordinator, Co-Facilitator, or TechSupport' })
                 }
             }
         }

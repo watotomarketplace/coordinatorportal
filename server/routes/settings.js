@@ -19,7 +19,7 @@ router.get('/', requireAdmin, async (req, res) => {
         // Convert array to object, masking sensitive values
         const result = {}
         for (const s of settings) {
-            if (s.key === 'notion_api_key' && s.value) {
+            if ((s.key === 'notion_api_key' || s.key === 'thinkific_api_key') && s.value) {
                 result[s.key] = s.value.substring(0, 8) + '••••••••'
             } else {
                 result[s.key] = s.value
@@ -36,7 +36,7 @@ router.get('/', requireAdmin, async (req, res) => {
 // --- UPDATE SETTINGS (Admin only) ---
 router.put('/', requireAdmin, async (req, res) => {
     try {
-        const { notion_api_key, notion_database_id, notion_sync_interval } = req.body
+        const { notion_api_key, notion_database_id, notion_sync_interval, thinkific_api_key, thinkific_subdomain } = req.body
 
         const upsert = async (key, value) => {
             if (value === undefined) return
@@ -51,6 +51,8 @@ router.put('/', requireAdmin, async (req, res) => {
         if (notion_api_key !== undefined) await upsert('notion_api_key', notion_api_key)
         if (notion_database_id !== undefined) await upsert('notion_database_id', notion_database_id)
         if (notion_sync_interval !== undefined) await upsert('notion_sync_interval', String(notion_sync_interval))
+        if (thinkific_api_key !== undefined) await upsert('thinkific_api_key', thinkific_api_key)
+        if (thinkific_subdomain !== undefined) await upsert('thinkific_subdomain', thinkific_subdomain)
         
         if (req.body.current_week !== undefined) {
             await upsert('current_week', String(req.body.current_week))

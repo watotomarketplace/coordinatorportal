@@ -1,10 +1,12 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import { getStudents } from '../lib/api'
 import api from '../lib/api'
-import { Search, Filter, ChevronRight, User, AlertTriangle, CheckCircle, Clock, MessageSquare, Send, Phone, Calendar, MapPin, Flag, BarChart2, TrendingUp, Target, X, Check, Download } from 'lucide-react'
+import { Search, Filter, ChevronRight, User, AlertTriangle, CheckCircle, Clock, MessageSquare, Send, Phone, Calendar, MapPin, Flag, BarChart2, TrendingUp, Target, X, Check, Download, Edit2 } from 'lucide-react'
 import { exportToCSV } from '../lib/export'
+import menuBus from '../lib/menuBus.js'
+import { CELEBRATION_POINTS } from '../constants/campuses'
 
 function getStudentName(s) {
   if (s.name && s.name.trim()) return s.name.trim()
@@ -147,6 +149,7 @@ function ProgressModal({ student, onClose }) {
 
 export default function Students() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
+  const setMenuBarContext = useAppStore(s => s.setMenuBarContext)
   const platform = useAppStore(s => s.platform)
   const user = useAuthStore(s => s.user)
 
@@ -160,6 +163,9 @@ export default function Students() {
   const [noteText, setNoteText] = useState('')
   const [savingNote, setSavingNote] = useState(false)
   const [showProgressModal, setShowProgressModal] = useState(false)
+  const [showCampusModal, setShowCampusModal] = useState(false)
+  const [campusSelect, setCampusSelect] = useState('')
+  const [campusOverrideLoading, setCampusOverrideLoading] = useState(false)
 
   useEffect(() => { setPageTitle('Students') }, [setPageTitle])
 
@@ -227,6 +233,7 @@ export default function Students() {
     if (filter === 'inactive') list = list.filter(s => (s.daysInactive || 0) >= 14)
     if (filter === 'at-risk') list = list.filter(s => s.risk_category === 'Critical' || s.risk_category === 'Attention')
     if (filter === 'on-track') list = list.filter(s => (s.progress || s.percentage_completed || 0) >= 75)
+    if (filter === 'unknown-campus') list = list.filter(s => s.celebration_point === 'Unknown')
     return list
   }, [students, search, filter])
 
@@ -244,12 +251,53 @@ export default function Students() {
     finally { setSavingNote(false) }
   }
 
+  const canAssignCampus = ['Admin', 'LeadershipTeam', 'TechSupport', 'Coordinator', 'Pastor'].includes(user?.role)
+
+  const handleAssignCampus = async () => {
+    if (!campusSelect || !detail) return
+    setCampusOverrideLoading(true)
+    try {
+      await api.post('/api/campus-overrides', { thinkific_user_id: detail.userId, campus: campusSelect })
+      setDetail(prev => ({ ...prev, celebration_point: campusSelect }))
+      setStudents(prev => prev.map(s => s.userId === detail.userId ? { ...s, celebration_point: campusSelect } : s))
+      setShowCampusModal(false)
+      setCampusSelect('')
+    } catch (err) {
+      console.error('Campus assignment failed:', err)
+    } finally {
+      setCampusOverrideLoading(false)
+    }
+  }
+
   const filters = [
     { key: 'all', label: 'All Students', icon: User },
     { key: 'at-risk', label: 'At Risk', icon: AlertTriangle },
     { key: 'inactive', label: 'Inactive >14d', icon: Clock },
     { key: 'on-track', label: 'On Track 75%+', icon: CheckCircle },
+    { key: 'unknown-campus', label: 'Unknown Campus', icon: MapPin },
   ]
+
+  const filteredRef = useRef([])
+  filteredRef.current = filtered
+
+  useEffect(() => {
+    const student = students.find(s => String(s.id) === String(selected)) ?? null
+    setMenuBarContext('selectedStudent', student)
+  }, [selected, students, setMenuBarContext])
+
+  useEffect(() => {
+    const riskMap = { Healthy: 'on-track', Attention: 'at-risk', Critical: 'at-risk' }
+    const unsubs = [
+      menuBus.on('students:export-roster', () => exportToCSV(filteredRef.current, 'students.csv')),
+      menuBus.on('students:export-risk', () =>
+        exportToCSV(filteredRef.current.filter(s => s.risk_category !== 'Healthy'), 'students-risk.csv')
+      ),
+      menuBus.on('students:filter-risk', ({ risk }) => setFilter(riskMap[risk] ?? 'all')),
+      menuBus.on('students:clear-filters', () => { setFilter('all'); setSearch('') }),
+      menuBus.on('students:view-profile', () => setShowProgressModal(true)),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   if (loading) {
     return (
@@ -263,6 +311,38 @@ export default function Students() {
     return (
       <div className="three-col" style={{ height: 'calc(100vh - 195px)', maxHeight: 'calc(100vh - 195px)' }}>
         {showProgressModal && <ProgressModal student={detail} onClose={() => setShowProgressModal(false)} />}
+        {showCampusModal && detail && (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowCampusModal(false)}>
+            <div className="modal" style={{ maxWidth: 380 }}>
+              <div className="modal-header">
+                <span className="modal-title">Assign Campus</span>
+                <button className="btn btn-ghost btn-icon" onClick={() => setShowCampusModal(false)}><X size={18} /></button>
+              </div>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+                  Assign <strong>{getStudentName(detail)}</strong> to a campus. This override persists across Thinkific sync cycles.
+                </p>
+                <select
+                  className="form-input"
+                  value={campusSelect}
+                  onChange={e => setCampusSelect(e.target.value)}
+                  style={{ width: '100%' }}
+                >
+                  <option value="">Select campus…</option>
+                  {(CELEBRATION_POINTS || []).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  disabled={!campusSelect || campusOverrideLoading}
+                  onClick={handleAssignCampus}
+                >
+                  {campusOverrideLoading ? 'Saving…' : 'Save Assignment'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="col-sidebar">
           <div className="sidebar-title">Filters</div>
           {filters.map(f => {
@@ -280,6 +360,7 @@ export default function Students() {
                     if (f.key === 'inactive') return s.daysInactive >= 14
                     if (f.key === 'at-risk') return s.risk_category === 'Critical' || s.risk_category === 'Attention'
                     if (f.key === 'on-track') return (s.progress || s.percentage_completed || 0) >= 75
+                    if (f.key === 'unknown-campus') return s.celebration_point === 'Unknown'
                     return false
                   }).length}
                 </span>
@@ -312,6 +393,15 @@ export default function Students() {
               />
             </div>
           </div>
+          {(user?.role === 'Facilitator' || user?.role === 'CoFacilitator') && (
+            <div style={{
+              padding: '8px 12px', margin: '0 0 0 0',
+              fontSize: 11, color: 'rgba(74,158,255,0.85)', fontWeight: 500,
+              background: 'rgba(74,158,255,0.07)', borderBottom: '1px solid rgba(74,158,255,0.15)',
+            }}>
+              Showing students in your assigned group only
+            </div>
+          )}
           <div className="col-list-scroll">
             {filtered.map(s => (
               <div
@@ -397,8 +487,16 @@ export default function Students() {
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Campus</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <MapPin size={12} /> {detail.celebration_point || '—'}
+                      {(detail.celebration_point === 'Unknown' || !detail.celebration_point) && canAssignCampus && (
+                        <button
+                          onClick={() => { setCampusSelect(''); setShowCampusModal(true) }}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid rgba(99,102,241,0.5)', background: 'rgba(99,102,241,0.12)', color: '#a5b4fc', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
+                        >
+                          <Edit2 size={10} /> Assign
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div>
@@ -598,6 +696,15 @@ export default function Students() {
         ))}
       </div>
 
+      {(user?.role === 'Facilitator' || user?.role === 'CoFacilitator') && (
+        <div style={{
+          margin: '0 16px 10px', padding: '8px 12px', borderRadius: 8,
+          fontSize: 11, color: 'rgba(74,158,255,0.85)', fontWeight: 500,
+          background: 'rgba(74,158,255,0.08)', border: '1px solid rgba(74,158,255,0.2)',
+        }}>
+          Showing students in your assigned group only
+        </div>
+      )}
       <div className="ios-list">
         {filtered.slice(0, 50).map(s => (
           <div key={s.id} className="ios-row" onClick={() => setSelected(s.id)}>

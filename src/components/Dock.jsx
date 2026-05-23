@@ -11,7 +11,7 @@ import {
 const DOCK_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, color: 'linear-gradient(135deg, #FF9966, #FF5E62)' },
   { path: '/students', label: 'Students', icon: GraduationCap, color: 'linear-gradient(135deg, #56CCF2, #2F80ED)' },
-  { path: '/admin', label: 'Users', icon: Users, color: 'linear-gradient(135deg, #11998e, #38ef7d)', roles: ['Admin', 'LeadershipTeam', 'Coordinator', 'TechSupport'] },
+  { path: '/admin', label: 'Users', icon: Users, color: 'linear-gradient(135deg, #11998e, #38ef7d)', roles: ['Admin', 'LeadershipTeam', 'Pastor', 'Coordinator', 'TechSupport'] },
   { path: '/groups', label: 'Groups', icon: UsersRound, color: 'linear-gradient(135deg, #667eea, #764ba2)' },
   { path: '/attendance', label: 'Attendance', icon: Calendar, color: 'linear-gradient(135deg, #f6d365, #fda085)' },
   { path: '/weekly-reports', label: 'Reports', icon: FileText, color: 'linear-gradient(135deg, #00b09b, #96c93d)' },

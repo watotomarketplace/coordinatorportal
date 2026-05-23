@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { GroupOverviewTabs, MemberDetailPanel, AttendanceRing, AddMemberModal } from './GroupDetail'
 import { exportToCSV } from '../lib/export'
+import menuBus from '../lib/menuBus.js'
 import { CELEBRATION_POINTS } from '../constants/campuses'
 
 const CAMPUS_CODES = {
@@ -235,6 +236,7 @@ function ImportGroupsModal({ onClose, onImported }) {
 
 export default function FormationGroups() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
+  const setMenuBarContext = useAppStore(s => s.setMenuBarContext)
   const platform = useAppStore(s => s.platform)
   const navigate = useNavigate()
   const hasRole = useAuthStore(s => s.hasRole)
@@ -306,6 +308,24 @@ export default function FormationGroups() {
     }
     return list
   }, [groups, campusFilter, search])
+
+  const filteredRef = useRef([])
+  filteredRef.current = filtered
+
+  useEffect(() => {
+    setMenuBarContext('selectedGroup', activeGroup)
+  }, [activeGroup, setMenuBarContext])
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('groups:new', () => setShowCreate(true)),
+      menuBus.on('groups:export', () => exportToCSV(filteredRef.current, 'formation-groups.csv')),
+      menuBus.on('groups:filter-campus', ({ campus }) => setCampusFilter(campus ?? 'All')),
+      menuBus.on('groups:filter-active', () => setCampusFilter('All')),
+      menuBus.on('groups:clear-filters', () => { setCampusFilter('All'); setSearch('') }),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   const handleGroupSelect = (g) => {
     if (platform === 'mobile') {

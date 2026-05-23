@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '../stores/appStore'
 import api from '../lib/api'
+import menuBus from '../lib/menuBus.js'
 import { Search, Wrench, Key, UserCog, Shield, Check, X, Copy, CopyCheck } from 'lucide-react'
 
 export default function TechSupport() {
   const setPageTitle = useAppStore(s => s.setPageTitle)
+  const setMenuBarContext = useAppStore(s => s.setMenuBarContext)
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
   const [selected, setSelected] = useState(null)
@@ -73,10 +75,27 @@ export default function TechSupport() {
       }
     } catch (err) { 
       alert(err.message) 
-    } finally { 
-      setResetting(false) 
+    } finally {
+      setResetting(false)
     }
   }
+
+  useEffect(() => {
+    setMenuBarContext('selectedUser', selected)
+  }, [selected, setMenuBarContext])
+
+  const resetRef = useRef(handleResetPassword)
+  resetRef.current = handleResetPassword
+
+  useEffect(() => {
+    const unsubs = [
+      menuBus.on('tech-support:focus-search', () =>
+        document.querySelector('[data-techsupport-search]')?.focus()
+      ),
+      menuBus.on('tech-support:reset-password', () => resetRef.current()),
+    ]
+    return () => unsubs.forEach(u => u())
+  }, [])
 
   const copyToClipboard = () => {
     if (!tempPassword) return
@@ -103,6 +122,7 @@ export default function TechSupport() {
           <div style={{ position: 'relative', marginBottom: 16 }}>
             <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
             <input
+              data-techsupport-search
               className="form-input"
               placeholder="Search by name or email…"
               value={search}

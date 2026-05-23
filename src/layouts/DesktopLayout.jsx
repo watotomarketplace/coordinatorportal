@@ -1,27 +1,32 @@
 import React, { useState } from 'react'
-import { Bell } from 'lucide-react'
 import { useAuthStore } from '../stores/authStore'
 import { useAppStore } from '../stores/appStore'
 import WindowControls from '../components/WindowControls'
+import MenuBar from '../components/MenuBar'
 import Dock from '../components/Dock'
-
-const MENU_ITEMS = ['File', 'Edit', 'View', 'Window', 'Help']
+import { useDraggableWindow } from '../hooks/useDraggableWindow.js'
 
 export default function DesktopLayout({ children }) {
   const user = useAuthStore(s => s.user)
   const pageTitle = useAppStore(s => s.pageTitle)
-  
-  // State for optional toggle of the window visibility
+  const platform = useAppStore(s => s.platform)
+
   const [windowVisible, setWindowVisible] = useState(true)
+  const { windowRef, onTitleMouseDown, onTitleDoubleClick } = useDraggableWindow()
 
   return (
     <div className="desktop-wrapper">
-      {/* Top Menu Bar spanning the full width (macOS style) REMOVED as requested */}
+      {/* macOS-style menu bar — fixed at top of viewport, outside window */}
+      {platform !== 'mobile' && <MenuBar />}
 
       {windowVisible && (
-        <div className="desktop-window">
+        <div ref={windowRef} className="desktop-window">
           {/* Traffic Lights and Title Bar */}
-          <WindowControls title={`${pageTitle} — WL101 Portal`} />
+          <WindowControls
+            title={`${pageTitle} — WL101 Portal`}
+            onTitleMouseDown={onTitleMouseDown}
+            onTitleDoubleClick={onTitleDoubleClick}
+          />
           
           {/* Main scrollable body */}
           <div className="desktop-window-content">

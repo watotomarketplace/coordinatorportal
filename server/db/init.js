@@ -528,6 +528,35 @@ async function runMigrations() {
   try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN recommendations TEXT") } catch (_) {}
   try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN updated_at TEXT") } catch (_) {}
 
+  // student_campus_overrides — manual campus assignments that survive full Thinkific syncs
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS student_campus_overrides (
+        thinkific_user_id TEXT PRIMARY KEY,
+        campus TEXT NOT NULL,
+        assigned_by_user_id INTEGER REFERENCES users(id),
+        assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        note TEXT
+      )
+    `)
+  } catch (_) {}
+
+  // webhook_incoming — durable audit trail + retry queue for Thinkific webhooks
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS webhook_incoming (
+        id ${getPK()},
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        attempts INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        processed_at TEXT
+      )
+    `)
+  } catch (_) {}
+  try { await dbRun('CREATE INDEX IF NOT EXISTS idx_wi_status ON webhook_incoming(status, created_at)') } catch (_) {}
+
   console.log('✅ Database schemas verified/initialized')
 
   await seedFormationGroups()

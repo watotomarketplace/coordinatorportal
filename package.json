@@ -11,7 +11,8 @@
     "build": "vite build",
     "build:watch": "vite build --watch --emptyOutDir false --mode development",
     "preview": "vite preview",
-    "build:icons": "npx esbuild src/icons/icons-bundle.js --bundle --outfile=dist/assets/icons.js --format=iife --platform=browser"
+    "build:icons": "npx esbuild src/icons/icons-bundle.js --bundle --outfile=dist/assets/icons.js --format=iife --platform=browser",
+    "dev:auto": "node scripts/find-port.js"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.14",
@@ -23,6 +24,7 @@
     "chart.js": "^4.4.1",
     "compression": "^1.8.1",
     "concurrently": "^8.2.2",
+    "connect-pg-simple": "^10.0.0",
     "connect-redis": "^9.0.0",
     "cors": "^2.8.5",
     "csv-parse": "^6.2.1",

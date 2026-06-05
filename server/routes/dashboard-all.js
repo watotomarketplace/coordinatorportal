@@ -98,7 +98,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         const campusFilter = campus ? 'AND fg.celebration_point = ?' : ''
         const campusParam = campus ? [campus] : []
 
-        // ── 3. Attendance trend (weeks 1-13) ────────────────────────────────────
+        // ── 3. Attendance trend (weeks 1-16) ────────────────────────────────────
         const attendanceTrend = await dbAll(`
             SELECT gs.week_number,
                    COUNT(gs.id) as session_count,
@@ -118,12 +118,12 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${campusFilter}
-              AND gs.week_number BETWEEN 1 AND 13
+              AND gs.week_number BETWEEN 1 AND 16
             GROUP BY gs.week_number
             ORDER BY gs.week_number
         `, campusParam)
 
-        const attendanceByWeek = Array.from({ length: 13 }, (_, i) => ({
+        const attendanceByWeek = Array.from({ length: 16 }, (_, i) => ({
             label: `Week ${i + 1}`,
             value: 0
         }))
@@ -132,7 +132,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         let attWeeks = 0
         attendanceTrend.forEach(t => {
             const wk = parseInt(t.week_number, 10)
-            if (wk >= 1 && wk <= 13) {
+            if (wk >= 1 && wk <= 16) {
                 const val = Math.round(t.avg_att || 0)
                 attendanceByWeek[wk - 1].value = val
                 totalSessions += parseInt(t.session_count, 10) || 0
@@ -150,7 +150,7 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         `, campusParam)
         const groupsTracking = groupsTrackingRow?.cnt || 0
 
-        // ── 4. Pastoral concerns trend (weeks 1-13) ─────────────────────────────
+        // ── 4. Pastoral concerns trend (weeks 1-16) ─────────────────────────────
         // Filter out "None"/"None for now" etc. — real concerns only
         const pastoralTrend = await dbAll(`
             SELECT wr.week_number, COUNT(*) as cnt
@@ -159,20 +159,20 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             WHERE wr.pastoral_concerns IS NOT NULL
               AND LENGTH(wr.pastoral_concerns) > 20
               AND LOWER(wr.pastoral_concerns) NOT LIKE '%none%'
-              AND wr.week_number BETWEEN 1 AND 13
+              AND wr.week_number BETWEEN 1 AND 16
               ${campusFilter}
             GROUP BY wr.week_number
             ORDER BY wr.week_number
         `, campusParam)
 
-        const trendsByWeek = Array.from({ length: 13 }, (_, i) => ({
+        const trendsByWeek = Array.from({ length: 16 }, (_, i) => ({
             week: i + 1,
             reports: 0,
             concerns: 0
         }))
         pastoralTrend.forEach(t => {
             const wk = parseInt(t.week_number, 10)
-            if (wk >= 1 && wk <= 13) trendsByWeek[wk - 1].concerns = t.cnt
+            if (wk >= 1 && wk <= 16) trendsByWeek[wk - 1].concerns = t.cnt
         })
 
         // Also fill report counts per week
@@ -180,13 +180,13 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
             SELECT wr.week_number, COUNT(*) as cnt
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
-            WHERE wr.week_number BETWEEN 1 AND 13 ${campusFilter}
+            WHERE wr.week_number BETWEEN 1 AND 16 ${campusFilter}
             GROUP BY wr.week_number
             ORDER BY wr.week_number
         `, campusParam)
         reportCountsByWeek.forEach(t => {
             const wk = parseInt(t.week_number, 10)
-            if (wk >= 1 && wk <= 13) trendsByWeek[wk - 1].reports = t.cnt
+            if (wk >= 1 && wk <= 16) trendsByWeek[wk - 1].reports = t.cnt
         })
 
         // ── 5. Reporting compliance ─────────────────────────────────────────────

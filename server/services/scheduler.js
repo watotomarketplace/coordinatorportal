@@ -53,29 +53,41 @@ export async function initScheduler() {
     if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
         console.log('⏰ Adding fallback node-cron Thinkific Sync (every 5 mins)')
         let consecutiveFailures = 0
-        const thinkificTask = cron.schedule(CRON_SCHEDULES.THINKIFIC_SYNC, async () => {
-            console.log('⏰ Cron: Thinkific sync starting')
-            try {
-                await forceRefresh()
-                if (consecutiveFailures > 0) {
-                    console.log(`✅ Thinkific sync recovered after ${consecutiveFailures} failure(s)`)
-                }
-                consecutiveFailures = 0
-                await dbRun(
-                    "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_success', ?)",
-                    [new Date().toISOString()]
-                )
-            } catch (error) {
-                consecutiveFailures++
-                console.error(`❌ Cron sync failed (${consecutiveFailures} consecutive):`, error.message)
-                await dbRun(
-                    "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_error', ?)",
-                    [JSON.stringify({ message: error.message, failures: consecutiveFailures, at: new Date().toISOString() })]
-                )
-                if (consecutiveFailures >= 3) {
-                    console.error(`🚨 ALERT: Thinkific sync has failed ${consecutiveFailures} times in a row — check API credentials and connectivity`)
-                }
+        let isSyncRunning = false
+        const thinkificTask = cron.schedule(CRON_SCHEDULES.THINKIFIC_SYNC, () => {
+            // Fire-and-forget: do not await inside the cron callback to avoid blocking
+            // the event loop and causing subsequent cron ticks to be skipped.
+            if (isSyncRunning) {
+                console.log('⏰ Cron: Thinkific sync already running, skipping tick')
+                return
             }
+            isSyncRunning = true
+            console.log('⏰ Cron: Thinkific sync starting')
+            setImmediate(async () => {
+                try {
+                    await forceRefresh()
+                    if (consecutiveFailures > 0) {
+                        console.log(`✅ Thinkific sync recovered after ${consecutiveFailures} failure(s)`)
+                    }
+                    consecutiveFailures = 0
+                    await dbRun(
+                        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_success', ?)",
+                        [new Date().toISOString()]
+                    )
+                } catch (error) {
+                    consecutiveFailures++
+                    console.error(`❌ Cron sync failed (${consecutiveFailures} consecutive):`, error.message)
+                    await dbRun(
+                        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('cron_thinkific_last_error', ?)",
+                        [JSON.stringify({ message: error.message, failures: consecutiveFailures, at: new Date().toISOString() })]
+                    ).catch(() => {})
+                    if (consecutiveFailures >= 3) {
+                        console.error(`🚨 ALERT: Thinkific sync has failed ${consecutiveFailures} times in a row — check API credentials and connectivity`)
+                    }
+                } finally {
+                    isSyncRunning = false
+                }
+            })
         })
         tasks.push(thinkificTask)
     }
@@ -98,30 +110,24 @@ async function checkOverdueReports() {
 }
 
 /**
- * Check if the current week is a checkpoint week (4, 8, 13) and trigger generation
+ * Check if the current week is a checkpoint week (4, 8, 13, 16) and trigger generation
  */
 async function checkAndGenerateCheckpoints() {
-    // 1. Determine current academic week
-    // For MVP, we will rely on a manual system setting or assume we increment from a start date.
-    // Since strict calendar logic is complex, we will look for specific "Trigger" flags in settings 
-    // or just run for ALL checkpoint weeks and let the generator skip existing ones.
+    console.log('ℹ️  Triggering checkpoint generation for Weeks 4, 8, 13, 16...')
 
-    // Safest approach: Run for 4, 8, and 13. The generator checks for existence so it's idempotent.
-    console.log('ℹ️  Triggering checkpoint generation for Weeks 4, 8, 13...')
+    const checkpointWeeks = [4, 8, 13, 16]
+    const results = await Promise.all(checkpointWeeks.map(w => generateAllCheckpoints(w)))
 
-    const results4 = generateAllCheckpoints(4)
-    const results8 = generateAllCheckpoints(8)
-    const results13 = generateAllCheckpoints(13)
+    let totalGenerated = 0
+    for (let i = 0; i < checkpointWeeks.length; i++) {
+        totalGenerated += results[i].generated
+    }
 
-    const totalGenerated = results4.generated + results8.generated + results13.generated
     if (totalGenerated > 0) {
         console.log(`✅ Automated Checkpoints Generated: ${totalGenerated}`)
-
-        // Notify facilitators, coordinators, and admins
-        for (const week of [4, 8, 13]) {
-            const result = week === 4 ? results4 : week === 8 ? results8 : results13
-            if (result.generated > 0) {
-                notifyCheckpointReady(week, result.generated)
+        for (let i = 0; i < checkpointWeeks.length; i++) {
+            if (results[i].generated > 0) {
+                notifyCheckpointReady(checkpointWeeks[i], results[i].generated)
             }
         }
     } else {

@@ -12,6 +12,17 @@ const __dirname = path.dirname(__filename)
 
 const router = express.Router()
 
+// --- GET current week (any authenticated user) ---
+router.get('/current-week', async (req, res) => {
+    if (!req.session?.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    try {
+        const row = await dbGet("SELECT value FROM system_settings WHERE key = 'current_week'")
+        res.json({ success: true, week: row ? parseInt(row.value, 10) : 1 })
+    } catch {
+        res.json({ success: true, week: 1 })
+    }
+})
+
 // --- GET ALL SETTINGS (Admin only) ---
 router.get('/', requireAdmin, async (req, res) => {
     try {
@@ -56,6 +67,10 @@ router.put('/', requireAdmin, async (req, res) => {
         
         if (req.body.current_week !== undefined) {
             await upsert('current_week', String(req.body.current_week))
+        }
+        if (req.body.real_time_sync !== undefined) {
+            const val = (req.body.real_time_sync === true || req.body.real_time_sync === 'true') ? 'true' : 'false'
+            await upsert('real_time_sync', val)
         }
 
         // Restart auto-sync with new settings

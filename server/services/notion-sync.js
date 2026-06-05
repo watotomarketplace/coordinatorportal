@@ -38,9 +38,10 @@ const RETRY_CONFIG = {
 // --- Helpers ---
 
 async function getNotionConfig() {
-    const apiKey  = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_api_key'")
-    const dbId    = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_database_id'")
-    const interval = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_sync_interval'")
+    const apiKey      = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_api_key'")
+    const dbId        = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_database_id'")
+    const interval    = await dbGet("SELECT value FROM system_settings WHERE key = 'notion_sync_interval'")
+    const realTimeRow = await dbGet("SELECT value FROM system_settings WHERE key = 'real_time_sync'")
 
     const effectiveApiKey = apiKey?.value || process.env.NOTION_API_KEY
     const effectiveDbId   = dbId?.value   || process.env.NOTION_DB_ID
@@ -50,7 +51,8 @@ async function getNotionConfig() {
     return {
         apiKey: effectiveApiKey,
         databaseId: effectiveDbId,
-        syncIntervalMinutes: parseInt(interval?.value || process.env.NOTION_SYNC_INTERVAL || '3', 10)
+        syncIntervalMinutes: parseInt(interval?.value || process.env.NOTION_SYNC_INTERVAL || '3', 10),
+        realTimeSyncEnabled: realTimeRow?.value === 'true',
     }
 }
 
@@ -776,8 +778,9 @@ export async function startAutoSync() {
     }
 
     stopAutoSync()
-    const intervalMs = config.syncIntervalMinutes * 60 * 1000
-    console.log(`🔄 [NotionSync] Auto-sync started (every ${config.syncIntervalMinutes} minutes)`)
+    const intervalMs = config.realTimeSyncEnabled ? 30 * 1000 : config.syncIntervalMinutes * 60 * 1000
+    const modeLabel  = config.realTimeSyncEnabled ? 'real-time mode: every 30s' : `every ${config.syncIntervalMinutes} minutes`
+    console.log(`🔄 [NotionSync] Auto-sync started (${modeLabel})`)
 
     // Run initial sync immediately (non-blocking)
     syncWeeklyReports().catch(err => console.error('❌ [NotionSync] Initial sync error:', err.message))
@@ -816,6 +819,7 @@ export async function getSyncStatus() {
         ...lastSyncStatus,
         configured: !!config,
         syncIntervalMinutes: config?.syncIntervalMinutes || 15,
+        realTimeSyncEnabled: config?.realTimeSyncEnabled || false,
         history: syncHistory.slice(0, 10),
         latestReportDate,
         reportCount

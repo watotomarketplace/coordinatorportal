@@ -214,8 +214,10 @@ router.get('/:id', requireAuth, async (req, res) => {
 
         if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
 
-        // Access check
-        if ((user.role === 'Facilitator' || user.role === 'CoFacilitator') && group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id) {
+        // Access check — use Number() to guard against SQLite integer vs session string mismatch
+        if ((user.role === 'Facilitator' || user.role === 'CoFacilitator') &&
+            Number(group.facilitator_user_id) !== Number(user.id) &&
+            Number(group.co_facilitator_user_id) !== Number(user.id)) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
 
@@ -330,7 +332,7 @@ router.post('/:id/members', requireAuth, async (req, res) => {
         // Facilitators may only add to their own groups
         if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
             const group = await dbGet('SELECT facilitator_user_id, co_facilitator_user_id FROM formation_groups WHERE id = ?', [groupId])
-            if (!group || (group.facilitator_user_id !== user.id && group.co_facilitator_user_id !== user.id)) {
+            if (!group || (Number(group.facilitator_user_id) !== Number(user.id) && Number(group.co_facilitator_user_id) !== Number(user.id))) {
                 return res.status(403).json({ success: false, message: 'Access denied' })
             }
         }

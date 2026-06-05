@@ -147,6 +147,23 @@ router.post('/reset-password', async (req, res) => {
     }
 })
 
+// Change own password (authenticated users only)
+router.post('/change-password', async (req, res) => {
+    if (!req.session?.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    const { password } = req.body
+    if (!password || password.length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' })
+    }
+    try {
+        const hash = await bcrypt.hash(password, 10)
+        await dbRun('UPDATE users SET password = ? WHERE id = ?', [hash, req.session.user.id])
+        await saveDatabase()
+        res.json({ success: true })
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to update password' })
+    }
+})
+
 // Check if a reset token is valid (for the reset-password page)
 router.get('/reset-password/:token', async (req, res) => {
     try {

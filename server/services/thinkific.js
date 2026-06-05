@@ -1,4 +1,5 @@
 import axios from 'axios'
+import https from 'https'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -9,6 +10,24 @@ import { getThinkificCredentials } from './thinkific-common.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const CACHE_FILE = path.join(__dirname, '../db/cache.json')
+
+// Persistent TCP connections reduce handshake overhead on paginated requests
+const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 10 })
+
+// Retry with exponential backoff for transient network failures and 5xx errors
+async function withRetry(fn, label = 'request', attempts = 3) {
+    for (let i = 0; i < attempts; i++) {
+        try { return await fn() }
+        catch (err) {
+            const isRetryable = ['ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED'].includes(err.code)
+                || (err.response?.status >= 500)
+            if (!isRetryable || i === attempts - 1) throw err
+            const delay = 1000 * Math.pow(2, i)
+            console.warn(`⚠️ [Thinkific] ${label} failed (attempt ${i + 1}/${attempts}), retrying in ${delay / 1000}s: ${err.message}`)
+            await new Promise(r => setTimeout(r, delay))
+        }
+    }
+}
 
 // In-memory layer on top of the DB for fast lookups
 let cache = {
@@ -393,7 +412,7 @@ export async function doRefresh() {
             let totalFromApi = null
 
             while (hasMore) {
-                const response = await axios.get(
+                const response = await withRetry(() => axios.get(
                     'https://api.thinkific.com/api/public/v1/enrollments',
                     {
                         headers: {
@@ -404,9 +423,10 @@ export async function doRefresh() {
                         params: updatedAfterISO
                             ? { page, limit: 250, 'query[updated_at_gte]': updatedAfterISO }
                             : { page, limit: 250 },
-                        timeout: 45000,
+                        timeout: 120000,
+                        httpsAgent: keepAliveAgent,
                     }
-                )
+                ), `enrollments page ${page}`)
 
                 const items = response.data?.items || response.data?.data || []
                 allEnrollments.push(...items)
@@ -457,14 +477,15 @@ export async function doRefresh() {
             let userTotalPages = null
 
             while (true) {
-                const userRes = await axios.get(
+                const userRes = await withRetry(() => axios.get(
                     'https://api.thinkific.com/api/public/v1/users',
                     {
                         headers: { 'X-Auth-API-Key': apiKey, 'X-Auth-Subdomain': subdomain },
                         params: { page: userPage, limit: 250 },
-                        timeout: 45000,
+                        timeout: 120000,
+                        httpsAgent: keepAliveAgent,
                     }
-                )
+                ), `users page ${userPage}`)
                 const users = userRes.data?.items || userRes.data?.data || []
                 allUsers.push(...users)
 
@@ -539,13 +560,24 @@ export async function doRefresh() {
 
             const processed = toProcess.map(processEnrollment).filter(Boolean)
 
+            // Deduplicate by userId keeping highest progress — re-enrollments can reset to 0%
+            const byUserId = new Map()
+            for (const s of processed) {
+                const cur = byUserId.get(String(s.userId))
+                if (!cur || s.progress > cur.progress) byUserId.set(String(s.userId), s)
+            }
+            const deduped = [...byUserId.values()]
+            if (deduped.length < processed.length) {
+                console.log(`♻️  Deduped ${processed.length - deduped.length} duplicate enrollment(s) — kept highest progress per student`)
+            }
+
             // Persist to DB
-            for (const student of processed) {
+            for (const student of deduped) {
                 try { await upsertStudent(student) } catch (e) { console.warn('Upsert error:', e.message) }
             }
 
             // Strip internal raw fields for in-memory storage
-            const cleaned = processed.map(({ _rawEnrollment, ...s }) => s)
+            const cleaned = deduped.map(({ _rawEnrollment, ...s }) => s)
             if (isIncremental && cache.data && cache.data.length > 0) {
                 // Merge: update changed students, preserve others
                 const existing = new Map(cache.data.map(s => [String(s.userId), s]))
@@ -578,13 +610,13 @@ export async function doRefresh() {
                 await dbRun(upsertTs, ['thinkific_last_full_sync', String(cache.timestamp)]).catch(() => {})
             }
 
-            const dropped       = toProcess.length - processed.length
-            const unknownCampus = processed.filter(s => s.celebration_point === 'Unknown').length
+            const dropped       = toProcess.length - deduped.length
+            const unknownCampus = deduped.filter(s => s.celebration_point === 'Unknown').length
 
             console.log(`✅ Thinkific sync complete:
   Total fetched:      ${allEnrollments.length}
   WL101 filtered:     ${wl101Enrollments.length}
-  Processed:          ${processed.length}
+  Processed:          ${deduped.length}
   Dropped (invalid):  ${dropped}
   Unknown campus:     ${unknownCampus}`)
 
@@ -592,7 +624,7 @@ export async function doRefresh() {
                 timestamp: cache.timestamp,
                 rawFetched: allEnrollments.length,
                 wl101Count: wl101Enrollments.length,
-                processed: processed.length,
+                processed: deduped.length,
                 dropped,
                 unknownCampus,
             })

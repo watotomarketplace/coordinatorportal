@@ -11,7 +11,8 @@ import { dbGet, dbAll, dbRun } from '../db/init.js'
 const CHECKPOINT_RANGES = {
     4: { start: 1, end: 4 },
     8: { start: 5, end: 8 },
-    13: { start: 9, end: 13 }
+    13: { start: 9, end: 13 },
+    16: { start: 14, end: 16 }
 }
 
 /**

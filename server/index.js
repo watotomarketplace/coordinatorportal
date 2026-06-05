@@ -30,11 +30,19 @@ import dashboardAllRoutes from './routes/dashboard-all.js'
 import { initDatabase, IS_POSTGRES, getDatabase } from './db/init.js'
 import { preWarmCache, getCacheStatus } from './services/thinkific.js'
 import { initScheduler } from './services/scheduler.js'
+import { startAutoSync } from './services/notion-sync.js'
 import { initializeCronJobs } from './queue/index.js'
 import queueRoutes from './routes/queue.js'
 import webhookRoutes from './routes/webhooks.js'
 import campusOverrideRoutes from './routes/campus-overrides.js'
+import searchRoutes from './routes/search.js'
+import taskRoutes from './routes/tasks.js'
+import contactRoutes from './routes/contacts.js'
 import compression from 'compression'
+import { patchConsole } from './lib/logger.js'
+
+// Capture all console output into in-memory ring buffer for Live Logs viewer
+patchConsole()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -78,6 +86,9 @@ await initializeCronJobs()
 // Start Scheduler (Cron Jobs)
 initScheduler()
 
+// Start Notion auto-sync (falls back to setInterval when Redis is not configured)
+startAutoSync().catch(err => console.error('❌ [NotionSync] Failed to start auto-sync on boot:', err.message))
+
 // Middleware
 app.use(cors({
     origin: 'http://localhost:5173',
@@ -89,6 +100,9 @@ app.use(compression())
 
 // Serve Profile Images
 app.use('/profile-images', express.static(join(__dirname, '../Profile Images')))
+
+// Serve Dynamic Wallpapers (time-of-day JPEGs, separate from the static wallpapers/ folder)
+app.use('/dynamic-wallpapers', express.static(join(__dirname, '../Dynamic Wallpapers')))
 
 // Webhook route must be mounted with express.raw() BEFORE express.json() so HMAC verification
 // receives the raw request body (JSON middleware would consume it first).
@@ -155,12 +169,15 @@ app.use('/api/attendance', attendanceRoutes)
 app.use('/api/tech-support', techSupportRoutes)
 app.use('/api/exports', exportRoutes)
 app.use('/api/diagnostics', diagnosticRoutes)
+app.use('/api/tasks', taskRoutes)
+app.use('/api/contacts', contactRoutes)
 app.use('/api/user/preferences', userPreferencesRoutes)
 app.use('/api/queue', queueRoutes)
 app.use('/api/campus-overrides', campusOverrideRoutes)
 app.use('/api/public', imageRoutes)
 app.use('/api/dashboard/all', dashboardAllRoutes)
 app.use('/api/dashboard', dashboardSummaryRoutes)
+app.use('/api/search', searchRoutes)
 
 // Health check
 // Health check endpoint explicitly mapped

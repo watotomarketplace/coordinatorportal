@@ -78,6 +78,7 @@ async function runMigrations() {
       const usersSchema = await dbGet("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
       if (usersSchema && !usersSchema.sql.includes('CoFacilitator')) {
         console.log('🔄 Migrating users table to include CoFacilitator role...')
+        try { await dbRun("ROLLBACK") } catch (_) {}
         await dbRun("BEGIN TRANSACTION")
         await dbRun("ALTER TABLE users RENAME TO users_old")
         await dbRun(`
@@ -528,6 +529,75 @@ async function runMigrations() {
   try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN recommendations TEXT") } catch (_) {}
   try { await dbRun("ALTER TABLE discernment_checkpoints ADD COLUMN updated_at TEXT") } catch (_) {}
 
+  // ─── Extend checkpoint_week to include week 16 (program extended from 13→16 weeks) ─────────
+  if (!IS_POSTGRES) {
+    try {
+      const cpSchema = await dbGet("SELECT sql FROM sqlite_master WHERE type='table' AND name='discernment_checkpoints'")
+      if (cpSchema && !cpSchema.sql.includes('16')) {
+        console.log('🔄 Migrating discernment_checkpoints to include week 16...')
+        try { await dbRun("ROLLBACK") } catch (_) {}
+        await dbRun("BEGIN TRANSACTION")
+        await dbRun("ALTER TABLE discernment_checkpoints RENAME TO discernment_checkpoints_old")
+        await dbRun(`
+          CREATE TABLE discernment_checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            formation_group_id INTEGER NOT NULL,
+            checkpoint_week INTEGER NOT NULL CHECK(checkpoint_week IN (4, 8, 13, 16)),
+            summary TEXT,
+            attendance_trend TEXT,
+            engagement_trend TEXT,
+            recurring_themes TEXT,
+            formation_evidence_summary TEXT,
+            concerns_summary TEXT,
+            participants_flagged TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'reviewed')),
+            review_notes TEXT,
+            reviewed_by INTEGER,
+            reviewed_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            recommendations TEXT,
+            updated_at TEXT,
+            UNIQUE(formation_group_id, checkpoint_week)
+          )
+        `)
+        await dbRun(`
+          INSERT INTO discernment_checkpoints
+            (id, formation_group_id, checkpoint_week, summary, attendance_trend, engagement_trend,
+             recurring_themes, formation_evidence_summary, concerns_summary, participants_flagged,
+             status, review_notes, reviewed_by, reviewed_at, created_at, recommendations, updated_at)
+          SELECT
+            id, formation_group_id, checkpoint_week, summary, attendance_trend, engagement_trend,
+            recurring_themes, formation_evidence_summary, concerns_summary, participants_flagged,
+            status, review_notes, reviewed_by, reviewed_at, created_at, recommendations, updated_at
+          FROM discernment_checkpoints_old
+        `)
+        await dbRun("DROP TABLE discernment_checkpoints_old")
+        await dbRun("COMMIT")
+        console.log('✅ discernment_checkpoints extended to include week 16')
+      }
+    } catch (e) {
+      console.error('Failed to migrate discernment_checkpoints for week 16:', e.message)
+      try { await dbRun("ROLLBACK") } catch (_) {}
+    }
+  } else {
+    try {
+      const constraintRow = await dbGet(`
+        SELECT pg_get_constraintdef(oid) as def
+        FROM pg_constraint
+        WHERE conrelid = 'discernment_checkpoints'::regclass
+          AND contype = 'c'
+          AND conname LIKE '%checkpoint_week%'
+      `)
+      if (constraintRow && !constraintRow.def.includes('16')) {
+        await dbRun("ALTER TABLE discernment_checkpoints DROP CONSTRAINT IF EXISTS discernment_checkpoints_checkpoint_week_check")
+        await dbRun("ALTER TABLE discernment_checkpoints ADD CONSTRAINT discernment_checkpoints_checkpoint_week_check CHECK (checkpoint_week IN (4, 8, 13, 16))")
+        console.log('✅ PostgreSQL checkpoint_week constraint updated to include week 16')
+      }
+    } catch (e) {
+      console.error('PostgreSQL checkpoint_week constraint update:', e.message)
+    }
+  }
+
   // student_campus_overrides — manual campus assignments that survive full Thinkific syncs
   try {
     await dbRun(`
@@ -556,6 +626,33 @@ async function runMigrations() {
     `)
   } catch (_) {}
   try { await dbRun('CREATE INDEX IF NOT EXISTS idx_wi_status ON webhook_incoming(status, created_at)') } catch (_) {}
+
+  // ─── tasks — coordinator follow-up tasks linked to students/groups/reports ───
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id ${getPK()},
+        title TEXT NOT NULL,
+        description TEXT,
+        assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        related_type TEXT CHECK(related_type IN ('student', 'group', 'report', NULL)),
+        related_id TEXT,
+        due_date TEXT,
+        priority TEXT DEFAULT 'medium' CHECK(priority IN ('low', 'medium', 'high', 'urgent')),
+        tags TEXT DEFAULT '[]',
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to, status)')
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date, status)')
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_by)')
+  } catch (_) {}
+
+  // users — phone number for campus contacts directory
+  try { await dbRun("ALTER TABLE users ADD COLUMN phone TEXT") } catch (_) {}
 
   console.log('✅ Database schemas verified/initialized')
 
@@ -836,7 +933,7 @@ export function saveDatabase() {
   }
 }
 
-// Returns current program week (1–13). Uses cohort_start_date if set, else manual current_week.
+// Returns current program week (1–16). Uses cohort_start_date if set, else manual current_week.
 export async function getCurrentWeek() {
   try {
     const startRow = await dbGet("SELECT value FROM system_settings WHERE key = 'cohort_start_date'")
@@ -845,7 +942,7 @@ export async function getCurrentWeek() {
       if (!isNaN(start.getTime())) {
         const diffMs = Date.now() - start.getTime()
         const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1
-        return Math.min(13, Math.max(1, week))
+        return Math.min(16, Math.max(1, week))
       }
     }
     const manualRow = await dbGet("SELECT value FROM system_settings WHERE key = 'current_week'")

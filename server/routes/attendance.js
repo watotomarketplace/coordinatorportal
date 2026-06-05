@@ -17,7 +17,7 @@ async function checkGroupAccess(user, groupId, requireWrite = false) {
 
     // Facilitator/CoFacilitator — must be assigned to the group
     if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-        return group.facilitator_user_id === user.id || group.co_facilitator_user_id === user.id
+        return Number(group.facilitator_user_id) === Number(user.id) || Number(group.co_facilitator_user_id) === Number(user.id)
     }
 
     // Campus-scoped roles (Coordinator, TechSupport, Pastor) — must be same campus
@@ -359,9 +359,9 @@ router.get('/dashboard', requireAuth, async (req, res) => {
         const cachedPayload = await getCache(cacheKey)
         if (cachedPayload) return res.json(cachedPayload)
 
-        if (user.role === 'Facilitator') {
-            whereClause += ' AND fg.facilitator_user_id = ?'
-            params = [user.id]
+        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
+            whereClause += ' AND (fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?)'
+            params = [user.id, user.id]
         } else if (!['Admin', 'LeadershipTeam'].includes(user.role) && user.celebration_point) {
             whereClause += ' AND fg.celebration_point = ?'
             params = [user.celebration_point]

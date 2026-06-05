@@ -50,12 +50,12 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
             FROM group_sessions gs
             JOIN formation_groups fg ON gs.formation_group_id = fg.id
             WHERE gs.did_not_meet = 0 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
-            AND gs.week_number BETWEEN 1 AND 13
+            AND gs.week_number BETWEEN 1 AND 16
             GROUP BY gs.week_number
             ORDER BY gs.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        const attendanceByWeek = Array.from({ length: 13 }, (_, i) => ({
+        const attendanceByWeek = Array.from({ length: 16 }, (_, i) => ({
             label: `Week ${i + 1}`,
             value: 0
         }))
@@ -65,7 +65,7 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         let attWeeks = 0
         attendanceTrend.forEach(t => {
             const wk = parseInt(t.week_number, 10)
-            if (wk >= 1 && wk <= 13) {
+            if (wk >= 1 && wk <= 16) {
                 const val = Math.round(t.avg_att || 0)
                 attendanceByWeek[wk - 1].value = val
                 totalSessions += parseInt(t.session_count, 10) || 0
@@ -101,21 +101,21 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
         
         reportingStats.totalReports = reports.length
         reportingStats.pastoralConcerns = reports.filter(r => r.pastoral_concerns && r.pastoral_concerns.length > 2).length
-        reportingStats.compliance = Math.round((reports.length / (totalGroupsCount * 13)) * 100)
+        reportingStats.compliance = Math.round((reports.length / (totalGroupsCount * 16)) * 100)
 
-        // Engagement/Pastoral trend over weeks (1-13)
+        // Engagement/Pastoral trend over weeks (1-16)
         const reportTrend = await dbAll(`
-            SELECT wr.week_number, 
+            SELECT wr.week_number,
                    COUNT(wr.id) as report_count,
                    SUM(CASE WHEN wr.pastoral_concerns IS NOT NULL AND LENGTH(wr.pastoral_concerns) > 2 THEN 1 ELSE 0 END) as concerns_count
             FROM weekly_reports wr
             JOIN formation_groups fg ON wr.formation_group_id = fg.id
-            WHERE wr.week_number BETWEEN 1 AND 13 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
+            WHERE wr.week_number BETWEEN 1 AND 16 ${celebrationPoint ? 'AND fg.celebration_point = ?' : ''}
             GROUP BY wr.week_number
             ORDER BY wr.week_number ASC
         `, celebrationPoint ? [celebrationPoint] : [])
 
-        const trendsByWeek = Array.from({ length: 13 }, (_, i) => ({
+        const trendsByWeek = Array.from({ length: 16 }, (_, i) => ({
             week: i + 1,
             reports: 0,
             concerns: 0
@@ -123,7 +123,7 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
 
         reportTrend.forEach(t => {
             const wk = parseInt(t.week_number, 10)
-            if (wk >= 1 && wk <= 13) {
+            if (wk >= 1 && wk <= 16) {
                 trendsByWeek[wk - 1].reports = t.report_count
                 trendsByWeek[wk - 1].concerns = t.concerns_count
             }

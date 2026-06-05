@@ -96,8 +96,8 @@ router.post('/generate', requireAdmin, async (req, res) => {
     try {
         const { checkpoint_week } = req.body
 
-        if (![4, 8, 13].includes(Number(checkpoint_week))) {
-            return res.status(400).json({ success: false, message: 'checkpoint_week must be 4, 8, or 13' })
+        if (![4, 8, 13, 16].includes(Number(checkpoint_week))) {
+            return res.status(400).json({ success: false, message: 'checkpoint_week must be 4, 8, 13, or 16' })
         }
 
         const results = generateAllCheckpoints(Number(checkpoint_week))

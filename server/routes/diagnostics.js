@@ -4,8 +4,9 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
 import { userHasAnyRole } from '../middleware/rbac.js'
-import { dbGet, dbAll } from '../db/init.js'
-import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment } from '../services/thinkific.js'
+import { dbGet, dbAll, IS_POSTGRES } from '../db/init.js'
+import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById } from '../services/thinkific.js'
+import { getLogs } from '../lib/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -435,6 +436,48 @@ router.get('/thinkific-user-search', requireDiagnosticsAccess, async (req, res) 
     }
 })
 
+// GET /api/diagnostics/student-progress/:userId
+// Returns raw cache + DB record for one student — debugs 0% progress issues
+router.get('/student-progress/:userId', requireDiagnosticsAccess, async (req, res) => {
+    const { userId } = req.params
+    const student = getStudentById(userId)
+    let dbRecord = null
+    try {
+        const sql = IS_POSTGRES
+            ? 'SELECT student_id, thinkific_user_id, name, progress, risk_category, enrollment_status, celebration_point, updated_at FROM thinkific_students WHERE thinkific_user_id = $1'
+            : 'SELECT student_id, thinkific_user_id, name, progress, risk_category, enrollment_status, celebration_point, updated_at FROM thinkific_students WHERE thinkific_user_id = ?'
+        dbRecord = await dbGet(sql, [userId])
+    } catch (e) {
+        console.warn('[Diagnostics] student-progress DB error:', e.message)
+    }
+    res.json({
+        success: true,
+        inCache: !!student,
+        progress: student?.progress ?? null,
+        student: student ? {
+            userId: student.userId,
+            name: student.name,
+            email: student.email,
+            progress: student.progress,
+            celebration_point: student.celebration_point,
+            risk_category: student.risk_category,
+            status: student.status,
+            daysInactive: student.daysInactive,
+            lastActivity: student.lastActivity,
+        } : null,
+        dbRecord: dbRecord ? {
+            progress: dbRecord.progress,
+            risk_category: dbRecord.risk_category,
+            enrollment_status: dbRecord.enrollment_status,
+            celebration_point: dbRecord.celebration_point,
+            updated_at: dbRecord.updated_at,
+        } : null,
+        hint: !student ? 'Student not found in memory cache. Try triggering a Thinkific sync.' :
+              student.progress === 0 ? 'Progress is 0 — may be a re-enrollment reset. Check raw enrollment data via /thinkific-user-search.' :
+              null,
+    })
+})
+
 // POST /api/diagnostics/sync-dry-run
 // Runs a test sync (page 1 only) without persisting to cache — reveals API shape and filter results
 router.post('/sync-dry-run', requireDiagnosticsAccess, async (req, res) => {
@@ -525,6 +568,13 @@ router.post('/sync-dry-run', requireDiagnosticsAccess, async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message, body: err.response?.data })
     }
+})
+
+// GET /api/diagnostics/logs — recent server log entries for the Live Logs viewer
+router.get('/logs', requireDiagnosticsAccess, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 200, 500)
+  const level = req.query.level || null
+  res.json({ success: true, logs: getLogs(limit, level) })
 })
 
 export default router

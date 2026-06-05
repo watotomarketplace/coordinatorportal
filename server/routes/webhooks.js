@@ -107,4 +107,37 @@ router.post('/thinkific', async (req, res) => {
     }
 })
 
+// POST /api/webhooks/notion
+// Receives Notion database-change events and triggers an immediate incremental sync.
+// Set NOTION_WEBHOOK_SECRET env var and register this URL in your Notion integration
+// to skip polling latency entirely on new Tally submissions.
+router.post('/notion', express.raw({ type: 'application/json' }), async (req, res) => {
+    const body   = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '')
+    const secret = process.env.NOTION_WEBHOOK_SECRET
+
+    if (secret) {
+        const sig      = req.headers['x-notion-signature'] || ''
+        const expected = 'v0=' + crypto.createHmac('sha256', secret).update(body).digest('hex')
+        let valid = false
+        try { valid = sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)) } catch (_) {}
+        if (!valid) {
+            console.warn('⚠️ Notion webhook: invalid signature — ignoring')
+            return res.status(401).json({ error: 'Invalid signature' })
+        }
+    }
+
+    res.status(200).send('OK')
+
+    let payload = {}
+    try { payload = JSON.parse(body.toString()) } catch (_) {}
+    console.log(`📡 Notion webhook: ${payload.type || 'database_change'} — triggering immediate sync`)
+
+    try {
+        const { syncWeeklyReports } = await import('../services/notion-sync.js')
+        syncWeeklyReports().catch(err => console.error('❌ Notion webhook sync failed:', err.message))
+    } catch (e) {
+        console.error('❌ Notion webhook: could not import sync service:', e.message)
+    }
+})
+
 export default router

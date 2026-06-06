@@ -237,11 +237,19 @@ router.get('/:id', requireAuth, async (req, res) => {
             WHERE fgm.formation_group_id = ?
         `, [req.params.id])
 
-        members = members.map(m => {
-            const detail = getStudentById(m.student_id)
+        members = await Promise.all(members.map(async m => {
+            let detail = getStudentById(m.student_id)
+            // Cache miss: try DB directly so members still show names when sync hasn't run
+            if (!detail || !detail.name) {
+                const dbRow = await dbGet(
+                    'SELECT name, email FROM thinkific_students WHERE thinkific_user_id = ?',
+                    [m.student_id]
+                )
+                if (dbRow?.name) detail = { ...detail, name: dbRow.name, email: detail?.email || dbRow.email }
+            }
             const percentage = m.total > 0 ? Math.round((m.attended / m.total) * 100) : 0
             return { ...m, ...detail, percentage }
-        })
+        }))
 
         const reports = await dbAll(`
             SELECT id, week_number, attendance_count, engagement_level, submitted_at

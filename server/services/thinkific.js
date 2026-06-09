@@ -293,8 +293,20 @@ function triggerRefresh() {
 }
 
 async function upsertStudent(student) {
-    const upsertSql = IS_POSTGRES
-        ? `INSERT INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
+    const riskScore = student.risk?.score ?? student.risk_score ?? 0
+    const riskCat   = student.risk?.category ?? student.risk_category ?? 'Healthy'
+    const rawUser   = student._rawEnrollment?.user || null
+    const params = [
+        String(student.userId), String(student.userId), student.name, student.email,
+        student.celebration_point, student.progress, riskScore, riskCat,
+        student.last_sign_in_at || student.lastActivity || null,
+        student.joinedAt || student.lastActivity || null,
+        student.status || null,
+        JSON.stringify({ user: rawUser, enrollment: student._rawEnrollment })
+    ]
+
+    if (IS_POSTGRES) {
+        const upsertSql = `INSERT INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
            ON CONFLICT(student_id) DO UPDATE SET
              thinkific_user_id=EXCLUDED.thinkific_user_id, name=EXCLUDED.name, email=EXCLUDED.email,
@@ -302,20 +314,22 @@ async function upsertStudent(student) {
              risk_score=EXCLUDED.risk_score, risk_category=EXCLUDED.risk_category,
              last_sign_in_at=EXCLUDED.last_sign_in_at, enrollment_updated_at=EXCLUDED.enrollment_updated_at,
              enrollment_status=EXCLUDED.enrollment_status, raw_data=EXCLUDED.raw_data, updated_at=NOW()`
-        : `INSERT OR REPLACE INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`
-
-    const riskScore = student.risk?.score ?? student.risk_score ?? 0
-    const riskCat   = student.risk?.category ?? student.risk_category ?? 'Healthy'
-    const rawUser   = student._rawEnrollment?.user || null
-    await dbRun(upsertSql, [
-        String(student.userId), String(student.userId), student.name, student.email,
-        student.celebration_point, student.progress, riskScore, riskCat,
-        student.last_sign_in_at || student.lastActivity || null,
-        student.joinedAt || student.lastActivity || null,
-        student.status || null,
-        JSON.stringify({ user: rawUser, enrollment: student._rawEnrollment })
-    ])
+        try {
+            await dbRun(upsertSql, params)
+        } catch (pgErr) {
+            // ON CONFLICT may fail if prod schema predates student_id primary key — fall back to SELECT/INSERT/UPDATE
+            const existing = await dbGet('SELECT student_id FROM thinkific_students WHERE student_id = $1', [String(student.userId)])
+            if (!existing) {
+                await dbRun(`INSERT INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())`, params)
+            } else {
+                await dbRun(`UPDATE thinkific_students SET thinkific_user_id=$2, name=$3, email=$4, celebration_point=$5, progress=$6, risk_score=$7, risk_category=$8, last_sign_in_at=$9, enrollment_updated_at=$10, enrollment_status=$11, raw_data=$12, updated_at=NOW() WHERE student_id=$1`, params)
+            }
+        }
+    } else {
+        await dbRun(`INSERT OR REPLACE INTO thinkific_students (student_id, thinkific_user_id, name, email, celebration_point, progress, risk_score, risk_category, last_sign_in_at, enrollment_updated_at, enrollment_status, raw_data, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`, params)
+    }
 }
 
 // processEnrollment — parse a v2 enrollment object (embedded user) into a portal student record

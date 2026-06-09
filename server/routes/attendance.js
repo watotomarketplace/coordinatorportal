@@ -61,43 +61,43 @@ async function syncMembersFromFormationGroup(groupId) {
     // Upsert each formation group member into group_members
     for (const fm of fgMembers) {
         const sid = String(fm.student_id)
-        
-        let name = fm.student_name
-        let email = fm.student_email
+        try {
+            let name = fm.student_name
+            let email = fm.student_email
 
-        // 2705 ENHANCEMENT: Use Thinkific cache if name is missing
-        if (!name) {
-            const fallback = thinkificMap[sid] || getStudentById(sid)
-            if (fallback && fallback.name && fallback.name !== `Student ${sid}`) {
-                name = fallback.name
-                email = fallback.email || email
-                
-                // Backfill formation_group_members so we don't have to keep looking it up
-                try {
-                    await dbRun(
-                        'UPDATE formation_group_members SET student_name = ?, student_email = ? WHERE student_id = ? AND formation_group_id = ?',
-                        [name, email, sid, groupId]
-                    )
-                } catch (e) {}
-            } else {
-                name = `Student ${sid}`
+            if (!name) {
+                const fallback = thinkificMap[sid] || getStudentById(sid)
+                if (fallback && fallback.name && fallback.name !== `Student ${sid}`) {
+                    name = fallback.name
+                    email = fallback.email || email
+                    try {
+                        await dbRun(
+                            'UPDATE formation_group_members SET student_name = ?, student_email = ? WHERE student_id = ? AND formation_group_id = ?',
+                            [name, email, sid, groupId]
+                        )
+                    } catch (_) {}
+                } else {
+                    name = `Student ${sid}`
+                }
             }
-        }
 
-        const existing = await dbGet(
-            'SELECT id FROM group_members WHERE formation_group_id = ? AND student_thinkific_id = ?',
-            [groupId, sid]
-        )
-        if (!existing) {
-            await dbRun(
-                'INSERT INTO group_members (formation_group_id, student_thinkific_id, student_name, student_email, active) VALUES (?, ?, ?, ?, 1)',
-                [groupId, sid, name, email]
+            const existing = await dbGet(
+                'SELECT id FROM group_members WHERE formation_group_id = ? AND student_thinkific_id = ?',
+                [groupId, sid]
             )
-        } else {
-            await dbRun(
-                'UPDATE group_members SET student_name = ?, student_email = ?, active = 1 WHERE id = ?',
-                [name, email, existing.id]
-            )
+            if (!existing) {
+                await dbRun(
+                    'INSERT INTO group_members (formation_group_id, student_thinkific_id, student_name, student_email, active) VALUES (?, ?, ?, ?, 1)',
+                    [groupId, sid, name, email]
+                )
+            } else {
+                await dbRun(
+                    'UPDATE group_members SET student_name = ?, student_email = ?, active = 1 WHERE id = ?',
+                    [name, email, existing.id]
+                )
+            }
+        } catch (memberErr) {
+            console.warn(`[attendance] sync error for member ${sid}:`, memberErr.message)
         }
     }
 
@@ -121,7 +121,11 @@ router.get('/group/:groupId/members', requireAuth, async (req, res) => {
         if (!(await checkGroupAccess(req.session.user, groupId))) {
             return res.status(403).json({ success: false, message: 'Access denied' })
         }
-        await syncMembersFromFormationGroup(groupId)
+        try {
+            await syncMembersFromFormationGroup(groupId)
+        } catch (syncErr) {
+            console.warn(`[attendance] member sync failed for group ${groupId}, returning cached data:`, syncErr.message)
+        }
         const members = await dbAll(
             'SELECT * FROM group_members WHERE formation_group_id = ? AND active = 1 ORDER BY student_name',
             [groupId]

@@ -289,6 +289,7 @@ async function runMigrations() {
   `)
 
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_gm_group ON group_members(formation_group_id, active)`)
+  try { await dbRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_gm_unique ON group_members(formation_group_id, student_thinkific_id)`) } catch (_) {}
 
   await dbRun(`
     CREATE TABLE IF NOT EXISTS group_sessions (

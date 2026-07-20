@@ -655,6 +655,57 @@ async function runMigrations() {
   // users — phone number for campus contacts directory
   try { await dbRun("ALTER TABLE users ADD COLUMN phone TEXT") } catch (_) {}
 
+  // ─── Gate 2: Graduation Verification (commissioning) ──────────────────────
+  // One row per participant per group per cohort. Facilitators/CoFacilitators
+  // recommend; Coordinators/Pastors/Admin approve. Additive only.
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS graduation_verifications (
+        id ${getPK()},
+        student_thinkific_id TEXT NOT NULL,
+        student_id TEXT,
+        student_name TEXT,
+        student_email TEXT,
+        phone TEXT,
+        participant_role TEXT,
+        formation_group_id INTEGER NOT NULL,
+        celebration_point TEXT,
+        cohort TEXT DEFAULT '2026',
+        attended_weeks INTEGER,
+        total_weeks INTEGER DEFAULT 16,
+        attendance_met INTEGER DEFAULT 0,
+        online_progress INTEGER,
+        online_met INTEGER DEFAULT 0,
+        facilitator_user_id INTEGER,
+        recommendation TEXT CHECK(recommendation IN ('complete', 'exception', 'not_recommended')),
+        reason_for_gap TEXT,
+        evidence_category TEXT,
+        justification TEXT,
+        pastor_consulted INTEGER DEFAULT 0,
+        pastor_consulted_user_id INTEGER,
+        status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'submitted', 'approved', 'rejected')),
+        coordinator_user_id INTEGER,
+        review_note TEXT,
+        remarks TEXT,
+        submitted_at TEXT,
+        reviewed_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(student_thinkific_id, formation_group_id, cohort)
+      )
+    `)
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_gv_campus_status ON graduation_verifications(celebration_point, status)')
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_gv_group ON graduation_verifications(formation_group_id)')
+  } catch (e) { console.error('⚠️ graduation_verifications migration failed:', e.message) }
+
+  // Seed the online-progress threshold (percent) if absent — Ivan may lower to 90.
+  try {
+    const seedSetting = IS_POSTGRES
+      ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING"
+      : "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)"
+    await dbRun(seedSetting, ['graduation_online_threshold', '100'])
+  } catch (_) {}
+
   console.log('✅ Database schemas verified/initialized')
 
   await seedFormationGroups()

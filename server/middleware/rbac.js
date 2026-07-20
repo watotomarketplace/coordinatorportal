@@ -97,6 +97,16 @@ function requireCanImport(req, res, next) {
     next()
 }
 
+// Admin, LeadershipTeam, Coordinator, Pastor — can review/approve graduation
+// verifications. Facilitator group-ownership is enforced separately in-handler.
+function requireGraduationApprover(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    if (!userHasAnyRole(req.session.user, ['Admin', 'LeadershipTeam', 'Coordinator', 'Pastor'])) {
+        return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    next()
+}
+
 function applyCampusScope(req, res, next) {
     if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
 
@@ -140,5 +150,6 @@ export {
     requireAdminOrTechSupport,
     requireGroupManager,
     requireCanImport,
+    requireGraduationApprover,
     applyCampusScope
 }

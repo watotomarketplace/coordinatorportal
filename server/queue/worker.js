@@ -21,7 +21,13 @@ if (process.env.REDIS_URL || process.env.REDIS_HOST) {
                 const { forceRefresh } = await import('../services/thinkific.js')
                 await forceRefresh()
                 return true
-                
+
+            case 'submissions-sync':
+                console.log(`[Worker] Executing submissions-sync...`)
+                const { syncSubmissions } = await import('../services/thinkific-submissions.js')
+                await syncSubmissions()
+                return true
+
             case 'async-export':
                 console.log(`[Worker] Started async-export Job ID ${job.id}`)
                 await new Promise(r => setTimeout(r, 5000))

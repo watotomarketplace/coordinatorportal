@@ -48,6 +48,18 @@ function isFacilitatorOf(user, group) {
         Number(group.co_facilitator_user_id) === Number(user.id)
 }
 
+// Who may SUBMIT a recommendation: the group's facilitator/co-facilitator, or —
+// as a fallback when the facilitator doesn't act — a Coordinator/Pastor in the
+// same campus, or an Admin. The submitter is recorded on the row + audit log.
+function canSubmitVerification(user, group) {
+    if (!group) return false
+    if (isFacilitatorOf(user, group)) return true
+    if (userHasAnyRole(user, ['Coordinator', 'Pastor'])) {
+        return group.celebration_point === user.celebration_point
+    }
+    return false
+}
+
 // Compute attendance + online progress + existing verification for every active
 // member of a group. Join key: group_members.student_thinkific_id ==
 // thinkific_students.thinkific_user_id (== student_id — both hold the Thinkific
@@ -168,8 +180,8 @@ router.post('/verify', requireAuth, async (req, res) => {
             [formation_group_id]
         )
         if (!group) return res.status(404).json({ success: false, message: 'Group not found' })
-        if (!isFacilitatorOf(user, group)) {
-            return res.status(403).json({ success: false, message: 'Only the group facilitator/co-facilitator may submit recommendations' })
+        if (!canSubmitVerification(user, group)) {
+            return res.status(403).json({ success: false, message: 'Only the group facilitator/co-facilitator, or a coordinator/pastor for this campus, may submit recommendations' })
         }
 
         // Snapshot the computed criteria for this participant onto the row.

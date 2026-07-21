@@ -74,6 +74,14 @@ export async function initializeCronJobs() {
         removeOnFail: 50
     })
 
+    // Thinkific Submissions Sync (Gate 1): Every 30 minutes
+    await portalQueue.add('submissions-sync', {}, {
+        repeat: { pattern: '*/30 * * * *' },
+        jobId: 'cron-submissions-sync',
+        removeOnComplete: 10,
+        removeOnFail: 50
+    })
+
     // Email Reminders: Friday at 6:00 PM
     await portalQueue.add('email-reminders', {}, {
         repeat: { pattern: '0 18 * * 5' },

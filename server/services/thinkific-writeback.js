@@ -10,6 +10,7 @@
 import axios from 'axios'
 import { dbRun, dbGet } from '../db/init.js'
 import { getThinkificCredentials } from './thinkific-common.js'
+import { thinkificGraphQL } from './thinkific-auth.js'
 
 async function createClient() {
     const { apiKey, subdomain } = await getThinkificCredentials()
@@ -189,6 +190,57 @@ function generateTempPassword() {
         password += chars.charAt(Math.floor(Math.random() * chars.length))
     }
     return password
+}
+
+// ─── Gate 1: Assignment submission review write-back (GraphQL) ──────────────
+
+const UPDATE_SUBMISSION_MUTATION = `mutation ReviewSubmission($input: UpdateAssignmentSubmissionStatusInput!) {
+  updateAssignmentSubmissionStatus(input: $input) { clientMutationId }
+}`
+
+/**
+ * Set a Thinkific assignment submission's status via GraphQL.
+ * APPROVE is IRREVERSIBLE — it completes the course and issues the certificate.
+ * Callers MUST ensure this fires at most once per submission (guard on the
+ * mirror's portal_review_status before invoking). Audit-logged either way.
+ * @param {string} submissionId Thinkific submission id
+ * @param {'APPROVED'|'REJECTED'} status
+ * @param {object} actor { id, name, role }
+ * @param {string} [message] optional reviewer message (used on reject)
+ */
+async function setSubmissionStatus(submissionId, status, actor, message) {
+    const action = status === 'APPROVED' ? 'submission_approve' : 'submission_reject'
+    try {
+        const input = { submissionId: String(submissionId), status }
+        if (message) input.message = String(message)
+        await thinkificGraphQL(UPDATE_SUBMISSION_MUTATION, { input }, { label: action })
+
+        await dbRun(`
+            INSERT INTO audit_logs (user_id, user_name, role, action, target_type, target_id, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `, [actor.id, actor.name, actor.role, `thinkific_${action}`, 'submission', String(submissionId),
+            JSON.stringify({ actor_name: actor.name, actor_role: actor.role, status, message: message || null })])
+
+        return { success: true }
+    } catch (error) {
+        const errMsg = error.response?.data?.message || error.message
+        await dbRun(`
+            INSERT INTO audit_logs (user_id, user_name, role, action, target_type, target_id, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `, [actor.id, actor.name, actor.role, `thinkific_${action}_failed`, 'submission', String(submissionId),
+            JSON.stringify({ actor_name: actor.name, actor_role: actor.role, status, error: errMsg })]).catch(() => {})
+        return { success: false, error: errMsg }
+    }
+}
+
+// Approve → completes the WL101 course → Thinkific issues the certificate. Irreversible.
+export async function approveSubmission(submissionId, actor) {
+    return setSubmissionStatus(submissionId, 'APPROVED', actor)
+}
+
+// Reject → sends the submission back with an optional message.
+export async function rejectSubmission(submissionId, actor, message) {
+    return setSubmissionStatus(submissionId, 'REJECTED', actor, message)
 }
 
 /**

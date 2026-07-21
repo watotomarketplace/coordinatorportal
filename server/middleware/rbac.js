@@ -107,6 +107,16 @@ function requireGraduationApprover(req, res, next) {
     next()
 }
 
+// Admin, Coordinator — may pass/fail a Thinkific submission (fires the irreversible
+// approve/reject write-back). Narrower than requireGraduationApprover on purpose.
+function requireSubmissionReviewer(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    if (!userHasAnyRole(req.session.user, ['Admin', 'Coordinator'])) {
+        return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    next()
+}
+
 function applyCampusScope(req, res, next) {
     if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
 
@@ -151,5 +161,6 @@ export {
     requireGroupManager,
     requireCanImport,
     requireGraduationApprover,
+    requireSubmissionReviewer,
     applyCampusScope
 }

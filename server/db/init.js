@@ -706,6 +706,50 @@ async function runMigrations() {
     await dbRun(seedSetting, ['graduation_online_threshold', '100'])
   } catch (_) {}
 
+  // ─── Gate 1: Thinkific Assignment Submission mirror ───────────────────────
+  // Local mirror of Thinkific GraphQL assignment submissions so coordinators can
+  // review + pass/fail. A pass writes an APPROVE back to Thinkific (irreversible)
+  // which completes the course and triggers Thinkific's automatic certificate.
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS thinkific_submissions (
+        id ${getPK()},
+        thinkific_submission_id TEXT UNIQUE,
+        thinkific_user_id TEXT,
+        student_id TEXT,
+        student_name TEXT,
+        student_email TEXT,
+        lesson_id TEXT,
+        lesson_name TEXT,
+        course_name TEXT,
+        file_name TEXT,
+        file_url TEXT,
+        file_size INTEGER,
+        submitted_at TEXT,
+        thinkific_status TEXT,
+        portal_review_status TEXT DEFAULT 'unreviewed',
+        reviewed_by_user_id INTEGER,
+        reviewed_at TEXT,
+        review_note TEXT,
+        celebration_point TEXT,
+        synced_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tsub_campus_status ON thinkific_submissions(celebration_point, portal_review_status)')
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tsub_tstatus ON thinkific_submissions(thinkific_status)')
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tsub_user ON thinkific_submissions(thinkific_user_id)')
+  } catch (e) { console.error('⚠️ thinkific_submissions migration failed:', e.message) }
+
+  // Seed the WL101 graded-assignment lesson id (from Thinkific: "Final Submission
+  // - The Leadership Formation Portfolio") so the sync knows what to pull. Overridable.
+  try {
+    const seedSetting2 = IS_POSTGRES
+      ? "INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING"
+      : "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)"
+    await dbRun(seedSetting2, ['thinkific_assignment_lesson_ids', '76382279'])
+  } catch (_) {}
+
   console.log('✅ Database schemas verified/initialized')
 
   await seedFormationGroups()

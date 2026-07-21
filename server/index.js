@@ -39,6 +39,7 @@ import searchRoutes from './routes/search.js'
 import taskRoutes from './routes/tasks.js'
 import contactRoutes from './routes/contacts.js'
 import graduationRoutes from './routes/graduation.js'
+import graduationSubmissionRoutes from './routes/graduation-submissions.js'
 import compression from 'compression'
 import { patchConsole } from './lib/logger.js'
 
@@ -172,6 +173,7 @@ app.use('/api/exports', exportRoutes)
 app.use('/api/diagnostics', diagnosticRoutes)
 app.use('/api/tasks', taskRoutes)
 app.use('/api/contacts', contactRoutes)
+app.use('/api/graduation/submissions', graduationSubmissionRoutes)
 app.use('/api/graduation', graduationRoutes)
 app.use('/api/user/preferences', userPreferencesRoutes)
 app.use('/api/queue', queueRoutes)

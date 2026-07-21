@@ -11,6 +11,7 @@ import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, applyCampusScope, requireGraduationApprover, userRoles, userHasAnyRole } from '../middleware/rbac.js'
 import { logAudit } from '../services/audit.js'
+import { getStudentById } from '../services/thinkific.js'
 
 const router = express.Router()
 
@@ -99,7 +100,12 @@ async function computeRoster(group, threshold) {
     const roster = []
     for (const m of members) {
         const sid = String(m.student_thinkific_id)
-        let ts = await dbGet('SELECT name, email, progress FROM thinkific_students WHERE thinkific_user_id = ?', [sid])
+        // Resolve progress/name the SAME way the rest of the app does for group
+        // members (formation-groups.js, attendance.js): the in-memory Thinkific
+        // cache via getStudentById, which stays fresh even when the
+        // thinkific_students table lags on prod. Fall back to the table.
+        let ts = getStudentById(sid)
+        if (!ts) ts = await dbGet('SELECT name, email, progress FROM thinkific_students WHERE thinkific_user_id = ?', [sid])
         if (!ts) ts = await dbGet('SELECT name, email, progress FROM thinkific_students WHERE student_id = ?', [sid])
         if (!ts) mismatches++
 

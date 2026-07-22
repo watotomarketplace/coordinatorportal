@@ -1104,15 +1104,48 @@ export async function dbAll(sql, params = []) {
   }
 }
 
+// Tables that have NO `id` column (their PK is a natural key). Appending
+// "RETURNING id" to an INSERT against these fails on Postgres with 42703
+// (column "id" does not exist) and rejects the whole statement — which is what
+// silently prevented every new thinkific_students row from ever being written
+// on prod. The set is seeded from the schema and self-heals at runtime.
+const NO_ID_TABLES = new Set([
+  'thinkific_students',        // PK student_id TEXT
+  'system_settings',           // PK key TEXT
+  'student_campus_overrides',  // PK thinkific_user_id TEXT
+  'user_secondary_roles',      // UNIQUE(user_id, role), no id
+])
+
+// Extract the target table from an INSERT (handles "INSERT OR REPLACE/IGNORE INTO").
+function insertTargetTable(sql) {
+  const m = /^\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+["'`]?([A-Za-z0-9_]+)["'`]?/i.exec(sql)
+  return m ? m[1].toLowerCase() : null
+}
+
 export async function dbRun(sql, params = []) {
-  let returningClause = ''
-  if (IS_POSTGRES && sql.trim().toUpperCase().startsWith('INSERT')) {
-    returningClause = ' RETURNING id'
-  }
+  const isInsert = sql.trim().toUpperCase().startsWith('INSERT')
 
   if (IS_POSTGRES) {
-    const res = await pgPool.query(pgConvert(sql) + returningClause, params)
-    return { lastInsertRowid: res.rows[0]?.id || 0 }
+    const table = isInsert ? insertTargetTable(sql) : null
+    // Only ask for RETURNING id when the target table actually has an id column.
+    // If the table can't be parsed, keep the previous behaviour (append) so no
+    // caller silently loses lastInsertRowid; the 42703 retry below still covers it.
+    const wantsReturning = isInsert && (!table || !NO_ID_TABLES.has(table))
+    try {
+      const res = await pgPool.query(pgConvert(sql) + (wantsReturning ? ' RETURNING id' : ''), params)
+      return { lastInsertRowid: res.rows?.[0]?.id || 0 }
+    } catch (err) {
+      // 42703 = undefined_column. If it was OUR appended "RETURNING id", learn
+      // the table and retry once without it. Safe: Postgres rejects the entire
+      // statement on error, so nothing was written by the failed attempt.
+      if (wantsReturning && err?.code === '42703' && /\bid\b/i.test(err?.message || '')) {
+        NO_ID_TABLES.add(table)
+        console.warn(`[db] table "${table}" has no id column — retrying INSERT without RETURNING id (learned)`)
+        await pgPool.query(pgConvert(sql), params)
+        return { lastInsertRowid: 0 }
+      }
+      throw err
+    }
   } else {
     sqliteDb.run(sql, params)
     saveDatabase()

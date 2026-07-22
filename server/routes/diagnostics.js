@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
-import { userHasAnyRole } from '../middleware/rbac.js'
+import { userHasAnyRole, requireAdmin } from '../middleware/rbac.js'
 import { dbGet, dbAll, IS_POSTGRES } from '../db/init.js'
 import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById } from '../services/thinkific.js'
 import { getLogs } from '../lib/logger.js'
@@ -45,6 +45,97 @@ const requireDiagnosticsAccess = (req, res, next) => {
 }
 
 // Comprehensive Diagnostic Tool
+/**
+ * GET /api/diagnostics/schema-check  (Admin only, READ-ONLY — performs no writes)
+ *
+ * Reports the REAL schema of the write-path tables so the prod constraint state
+ * can be confirmed rather than assumed. Exists because a blanket "RETURNING id"
+ * on Postgres INSERTs silently failed (42703) for every table without an `id`
+ * column, leaving thinkific_students stale/empty while the sync reported success.
+ *
+ * Reports schema + counts only. Never reports credentials.
+ */
+const SCHEMA_CHECK_TABLES = [
+    'thinkific_students',
+    'group_members',
+    'formation_group_members',
+    'thinkific_submissions',
+]
+
+async function describeTable(table) {
+    const out = { table, columns: [], has_id_column: false, indexes: [], row_count: null, error: null }
+    try {
+        if (IS_POSTGRES) {
+            const cols = await dbAll(
+                'SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position',
+                [table]
+            )
+            out.columns = cols.map(c => `${c.column_name}:${c.data_type}`)
+            out.has_id_column = cols.some(c => String(c.column_name).toLowerCase() === 'id')
+            const idx = await dbAll('SELECT indexname, indexdef FROM pg_indexes WHERE tablename = ?', [table])
+            out.indexes = idx.map(i => i.indexdef)
+        } else {
+            const cols = await dbAll(`PRAGMA table_info(${table})`)
+            out.columns = cols.map(c => `${c.name}:${c.type}${c.pk ? ' PK' : ''}`)
+            out.has_id_column = cols.some(c => String(c.name).toLowerCase() === 'id')
+            const idx = await dbAll(`PRAGMA index_list(${table})`)
+            out.indexes = idx.map(i => `${i.name}${i.unique ? ' UNIQUE' : ''}`)
+        }
+        const cnt = await dbGet(`SELECT COUNT(*) AS n FROM ${table}`)
+        out.row_count = parseInt(cnt?.n ?? 0, 10)
+    } catch (e) {
+        out.error = e.message
+    }
+    return out
+}
+
+router.get('/schema-check', requireAdmin, async (req, res) => {
+    try {
+        const dialect = IS_POSTGRES ? 'postgres' : 'sqlite'
+        const tables = []
+        for (const t of SCHEMA_CHECK_TABLES) tables.push(await describeTable(t))
+
+        // thinkific_students health — the table the broken write path targets.
+        const students = { count: null, with_progress: null, max_updated_at: null, duplicates: [] }
+        try {
+            students.count = parseInt((await dbGet('SELECT COUNT(*) AS n FROM thinkific_students'))?.n ?? 0, 10)
+            students.with_progress = parseInt((await dbGet('SELECT COUNT(*) AS n FROM thinkific_students WHERE progress > 0'))?.n ?? 0, 10)
+            students.max_updated_at = (await dbGet('SELECT MAX(updated_at) AS m FROM thinkific_students'))?.m ?? null
+            students.duplicates = await dbAll(
+                'SELECT student_id, COUNT(*) AS n FROM thinkific_students GROUP BY student_id HAVING COUNT(*) > 1 LIMIT 20'
+            )
+        } catch (e) { students.error = e.message }
+
+        // Phase 5 (report only): verifications frozen at 0% that may be wrong.
+        const graduation = { zero_progress_rows: null, sample: [] }
+        try {
+            graduation.zero_progress_rows = parseInt((await dbGet(
+                "SELECT COUNT(*) AS n FROM graduation_verifications WHERE online_progress = 0 OR online_progress IS NULL"
+            ))?.n ?? 0, 10)
+            graduation.sample = await dbAll(
+                `SELECT gv.id, gv.student_thinkific_id, gv.student_name, gv.online_progress, gv.status, gv.submitted_at,
+                        ts.progress AS table_progress
+                 FROM graduation_verifications gv
+                 LEFT JOIN thinkific_students ts ON TRIM(ts.thinkific_user_id) = TRIM(gv.student_thinkific_id)
+                 WHERE gv.online_progress = 0 OR gv.online_progress IS NULL
+                 LIMIT 10`
+            )
+        } catch (e) { graduation.error = e.message }
+
+        res.json({
+            success: true,
+            dialect,
+            note: 'Read-only. A table with has_id_column=false must never receive "RETURNING id" on Postgres.',
+            tables,
+            thinkific_students: students,
+            graduation_verifications: graduation,
+        })
+    } catch (e) {
+        console.error('[diagnostics] schema-check error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
 router.get('/', requireDiagnosticsAccess, async (req, res) => {
     const payload = {}
     console.log('[Diagnostics] Running system diagnostics...')

@@ -656,9 +656,39 @@ export async function doRefresh() {
                 console.log(`♻️  Deduped ${processed.length - deduped.length} duplicate enrollment(s) — kept highest progress per student`)
             }
 
-            // Persist to DB
+            // Persist to DB. A total write failure used to look like a successful
+            // sync (one swallowed console line per row), which hid a two-month
+            // outage. Aggregate instead: count attempts/writes/failures, keep the
+            // first error with its SQL code + table, and report once.
+            const writeReport = { attempted: deduped.length, written: 0, failed: 0, firstError: null, byCode: {} }
             for (const student of deduped) {
-                try { await upsertStudent(student) } catch (e) { console.warn('Upsert error:', e.message) }
+                try {
+                    await upsertStudent(student)
+                    writeReport.written++
+                } catch (e) {
+                    writeReport.failed++
+                    const code = e?.code || 'UNKNOWN'
+                    writeReport.byCode[code] = (writeReport.byCode[code] || 0) + 1
+                    if (!writeReport.firstError) {
+                        writeReport.firstError = {
+                            table: 'thinkific_students',
+                            code,
+                            message: String(e?.message || '').slice(0, 300),
+                            statement: String(e?.sql || '').slice(0, 200) || undefined,
+                        }
+                    }
+                }
+            }
+            // Fail loudly when writes are broken, and surface it to the UI.
+            const failRatio = writeReport.attempted > 0 ? writeReport.failed / writeReport.attempted : 0
+            const writesBroken = writeReport.failed > 50 || failRatio > 0.05
+            if (writeReport.failed > 0) {
+                console.error(`❌ [Thinkific] DB write failures: ${writeReport.failed}/${writeReport.attempted} rows (${Math.round(failRatio * 100)}%) — codes: ${JSON.stringify(writeReport.byCode)} — first: [${writeReport.firstError?.code}] ${writeReport.firstError?.message}`)
+            }
+            if (writesBroken) {
+                // Surfaces via getCacheStatus().error → Diagnostics + the Dashboard
+                // "Thinkific Sync Pending" banner, instead of only in the logs.
+                cache.syncError = `DB write failure: ${writeReport.failed}/${writeReport.attempted} student rows not saved (${writeReport.firstError?.code}: ${writeReport.firstError?.message})`
             }
 
             // Strip internal raw fields for in-memory storage
@@ -684,7 +714,8 @@ export async function doRefresh() {
 
             cache.timestamp     = Date.now()
             cache.lastSyncSuccess = Date.now()
-            cache.syncError     = null
+            // Preserve a DB-write failure so it stays visible in Diagnostics/UI.
+            if (!writesBroken) cache.syncError = null
             saveCache()
 
             // Fix 1: Persist sync timestamp for incremental mode on next run
@@ -698,12 +729,16 @@ export async function doRefresh() {
             const dropped       = toProcess.length - deduped.length
             const unknownCampus = deduped.filter(s => s.celebration_point === 'Unknown').length
 
-            console.log(`✅ Thinkific sync complete:
+            const summary = `Thinkific sync ${writesBroken ? 'COMPLETED WITH WRITE FAILURES' : 'complete'}:
   Total fetched:      ${allEnrollments.length}
   WL101 filtered:     ${wl101Enrollments.length}
   Processed:          ${deduped.length}
+  Rows written:       ${writeReport.written}/${writeReport.attempted}
+  Rows FAILED:        ${writeReport.failed}
   Dropped (invalid):  ${dropped}
-  Unknown campus:     ${unknownCampus}`)
+  Unknown campus:     ${unknownCampus}`
+            if (writesBroken) console.error(`❌ ${summary}`)
+            else console.log(`✅ ${summary}`)
 
             await saveSyncReport({
                 timestamp: cache.timestamp,
@@ -712,6 +747,13 @@ export async function doRefresh() {
                 processed: deduped.length,
                 dropped,
                 unknownCampus,
+                // Write-path health — the thing that silently failed for two months.
+                rowsAttempted: writeReport.attempted,
+                rowsWritten: writeReport.written,
+                rowsFailed: writeReport.failed,
+                writeErrorsByCode: writeReport.byCode,
+                firstWriteError: writeReport.firstError,
+                writesBroken,
             })
 
         } catch (error) {

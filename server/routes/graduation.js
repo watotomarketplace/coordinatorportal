@@ -11,7 +11,7 @@ import express from 'express'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, applyCampusScope, requireGraduationApprover, userRoles, userHasAnyRole } from '../middleware/rbac.js'
 import { logAudit } from '../services/audit.js'
-import { resolveStudent } from '../services/thinkific.js'
+import { resolveStudentMap } from '../services/thinkific.js'
 
 const router = express.Router()
 
@@ -62,9 +62,12 @@ function canSubmitVerification(user, group) {
 }
 
 // Compute attendance + online progress + existing verification for every active
-// member of a group. Join key: group_members.student_thinkific_id ==
-// thinkific_students.thinkific_user_id (== student_id — both hold the Thinkific
-// user id). We prefer thinkific_user_id and fall back to student_id.
+// member of a group.
+// NOTE on identity: group_members.student_thinkific_id stores a Thinkific
+// ENROLLMENT id for most participants, while thinkific_students is keyed by
+// USER id. Resolution therefore goes through the shared resolver, which falls
+// back to thinkific_id_aliases (enrollment id → user id). Do not "simplify"
+// this to a direct join — that is what made ~97% of members read 0%.
 async function computeRoster(group, threshold) {
     const groupId = group.id
     const cohort = group.cohort || DEFAULT_COHORT
@@ -96,13 +99,18 @@ async function computeRoster(group, threshold) {
     )
     const verMap = new Map(verRows.map(v => [String(v.student_thinkific_id), v]))
 
+    // Batched shared resolver (cache → user_id → student_id → enrollment-id alias),
+    // keyed by the original roster id. One batch instead of one query per member.
+    const resolved = await resolveStudentMap(
+        members.map(m => m.student_thinkific_id),
+        `graduation group ${groupId}`
+    )
+
     let mismatches = 0
     const roster = []
     for (const m of members) {
         const sid = String(m.student_thinkific_id)
-        // Single shared resolver (cache → thinkific_user_id → student_id, trimmed
-        // string compare) so Graduation agrees with Dashboard/Students/Groups.
-        const ts = await resolveStudent(sid, `graduation group ${groupId}`)
+        const ts = resolved.get(String(sid).trim()) || null
         if (!ts) mismatches++
 
         const attendedWeeks = attMap.get(sid) || 0

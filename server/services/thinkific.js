@@ -62,6 +62,50 @@ export function normalizeProgress(raw) {
     return Math.max(0, Math.min(100, Math.round(pct)))
 }
 
+/**
+ * Harvest enrollment-id → user-id aliases from enrollment records.
+ *
+ * Rosters store Thinkific ENROLLMENT ids; thinkific_students is keyed by USER id.
+ * Every enrollment record already carries both, so the mapping is free — no extra
+ * API calls, and one full sync keeps it current as new ids appear.
+ *
+ * Called BEFORE the WL101 course-name filter so a roster id pointing at an
+ * enrollment in another course still resolves instead of staying orphaned.
+ * Chunked multi-row upsert so 5k+ enrollments cost a handful of statements.
+ */
+export async function upsertAliases(enrollments, source = 'enrollment_sync') {
+    const rows = []
+    const seen = new Set()
+    for (const e of (enrollments || [])) {
+        const alias = String(e?.id ?? '').trim()
+        const uid = String(e?.user_id ?? '').trim()
+        if (!alias || !uid || alias === uid) continue
+        if (seen.has(alias)) continue
+        seen.add(alias)
+        rows.push([alias, uid, source, e.course_name ?? e.product_name ?? null])
+    }
+    if (!rows.length) return { attempted: 0, written: 0, failed: 0 }
+
+    const CHUNK = 200
+    let written = 0, failed = 0
+    for (let i = 0; i < rows.length; i += CHUNK) {
+        const chunk = rows.slice(i, i + CHUNK)
+        const values = chunk.map(() => '(?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)').join(', ')
+        const params = chunk.flat()
+        const sql = `INSERT INTO thinkific_id_aliases
+                       (alias_id, thinkific_user_id, source, course_name, created_at, updated_at)
+                     VALUES ${values}
+                     ON CONFLICT(alias_id) DO UPDATE SET
+                       thinkific_user_id = EXCLUDED.thinkific_user_id,
+                       source            = EXCLUDED.source,
+                       course_name       = EXCLUDED.course_name,
+                       updated_at        = CURRENT_TIMESTAMP`
+        try { await dbRun(sql, params); written += chunk.length }
+        catch (err) { failed += chunk.length; console.warn(`[aliases] chunk upsert failed: ${err.message}`) }
+    }
+    return { attempted: rows.length, written, failed }
+}
+
 export function normalizeCelebrationPoint(raw) {
     if (!raw) return 'Unknown'
     // Strip "Watoto Church" prefix (with optional comma/space after it)
@@ -259,21 +303,88 @@ function toStudentShape(s) {
     }
 }
 
+function cacheLookup(sid) {
+    if (!cache.data) loadCache()
+    return (cache.data || []).find(s =>
+        String(s.id ?? '').trim() === sid || String(s.userId ?? '').trim() === sid) || null
+}
+
+// Chunked IN() lookup → Map keyed by BOTH trimmed identity columns.
+async function fetchStudentsByIds(ids) {
+    const map = new Map()
+    const list = [...new Set(ids)].filter(Boolean)
+    const CHUNK = 500
+    for (let i = 0; i < list.length; i += CHUNK) {
+        const chunk = list.slice(i, i + CHUNK)
+        const ph = chunk.map(() => '?').join(',')
+        try {
+            const rows = await dbAll(
+                `SELECT * FROM thinkific_students
+                 WHERE TRIM(CAST(thinkific_user_id AS TEXT)) IN (${ph})
+                    OR TRIM(CAST(student_id AS TEXT)) IN (${ph})`,
+                [...chunk, ...chunk]
+            )
+            for (const r of rows) {
+                const a = String(r.thinkific_user_id ?? '').trim()
+                const b = String(r.student_id ?? '').trim()
+                if (a) map.set(a, r)
+                if (b) map.set(b, r)
+            }
+        } catch (e) { console.warn('[resolveStudents] batch student lookup failed:', e.message) }
+    }
+    return map
+}
+
+// Chunked alias lookup → Map aliasId → canonical thinkific_user_id.
+async function fetchAliases(ids) {
+    const map = new Map()
+    const list = [...new Set(ids)].filter(Boolean)
+    const CHUNK = 500
+    for (let i = 0; i < list.length; i += CHUNK) {
+        const chunk = list.slice(i, i + CHUNK)
+        const ph = chunk.map(() => '?').join(',')
+        try {
+            const rows = await dbAll(
+                `SELECT alias_id, thinkific_user_id FROM thinkific_id_aliases
+                 WHERE TRIM(CAST(alias_id AS TEXT)) IN (${ph})`,
+                chunk
+            )
+            for (const r of rows) map.set(String(r.alias_id).trim(), String(r.thinkific_user_id).trim())
+        } catch (e) { console.warn('[resolveStudents] batch alias lookup failed:', e.message) }
+    }
+    return map
+}
+
+/**
+ * Resolve ONE member id. Order:
+ *   in-memory cache → thinkific_user_id → student_id → alias table → canonical id
+ * Rosters store Thinkific ENROLLMENT ids, so the alias step is what rescues the
+ * ~97% that previously fell through to 0%.
+ */
 export async function resolveStudent(idLike, context = '') {
     const sid = String(idLike ?? '').trim()
     if (!sid) return null
 
-    if (!cache.data) loadCache()
-    const hit = (cache.data || []).find(s =>
-        String(s.id ?? '').trim() === sid || String(s.userId ?? '').trim() === sid)
+    const hit = cacheLookup(sid)
     if (hit) return toStudentShape(hit)
 
     try {
-        let row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(thinkific_user_id) = ?', [sid])
-        if (!row) row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(student_id) = ?', [sid])
+        let row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(CAST(thinkific_user_id AS TEXT)) = ?', [sid])
+        if (!row) row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(CAST(student_id AS TEXT)) = ?', [sid])
         if (row) return toStudentShape(row)
+
+        // Not a user id — try translating it as an enrollment-id alias.
+        const alias = await dbGet('SELECT thinkific_user_id FROM thinkific_id_aliases WHERE TRIM(CAST(alias_id AS TEXT)) = ?', [sid])
+        const canonical = alias?.thinkific_user_id ? String(alias.thinkific_user_id).trim() : null
+        if (canonical) {
+            const c = cacheLookup(canonical)
+            if (c) return toStudentShape(c)
+            let crow = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(CAST(thinkific_user_id AS TEXT)) = ?', [canonical])
+            if (!crow) crow = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(CAST(student_id AS TEXT)) = ?', [canonical])
+            if (crow) return toStudentShape(crow)
+        }
     } catch (e) {
-        console.warn('[resolveStudent] DB lookup failed:', e.message)
+        console.warn('[resolveStudent] lookup failed:', e.message)
     }
 
     if (!_unresolvedLogged.has(sid)) {
@@ -283,12 +394,67 @@ export async function resolveStudent(idLike, context = '') {
     return null
 }
 
-// Resolve many ids at once, dropping unresolved ones.
+/**
+ * Batched resolver — at most 3 round-trips per chunk regardless of roster size.
+ * A 3,000-member page must never issue thousands of queries.
+ */
 export async function resolveStudents(ids, context = '') {
-    const out = []
-    for (const id of (ids || [])) {
-        const s = await resolveStudent(id, context)
-        if (s) out.push(s)
+    return [...(await resolveStudentMap(ids, context)).values()]
+}
+
+/**
+ * Same batching, but returns Map(originalRosterId → student record) so callers
+ * can map a roster row back to its student even though an alias changes the id.
+ */
+export async function resolveStudentMap(ids, context = '') {
+    const list = [...new Set((ids || []).map(x => String(x ?? '').trim()).filter(Boolean))]
+    if (!list.length) return []
+
+    const out = new Map()
+    const pending = []
+
+    // 1) in-memory cache — no queries at all
+    for (const sid of list) {
+        const hit = cacheLookup(sid)
+        if (hit) out.set(sid, toStudentShape(hit))
+        else pending.push(sid)
+    }
+    if (!pending.length) return out
+
+    // 2) one batched lookup against thinkific_students (both identity columns)
+    const direct = await fetchStudentsByIds(pending)
+    const stillPending = []
+    for (const sid of pending) {
+        const row = direct.get(sid)
+        if (row) out.set(sid, toStudentShape(row))
+        else stillPending.push(sid)
+    }
+    if (!stillPending.length) return out
+
+    // 3) one batched alias lookup, then resolve the canonical user ids
+    const aliasMap = await fetchAliases(stillPending)
+    const canonicalNeeded = []
+    const aliasOf = new Map()
+    for (const sid of stillPending) {
+        const canonical = aliasMap.get(sid)
+        if (!canonical) continue
+        aliasOf.set(sid, canonical)
+        if (!cacheLookup(canonical)) canonicalNeeded.push(canonical)
+    }
+    const canonicalRows = canonicalNeeded.length ? await fetchStudentsByIds(canonicalNeeded) : new Map()
+
+    for (const sid of stillPending) {
+        const canonical = aliasOf.get(sid)
+        let rec = null
+        if (canonical) {
+            const c = cacheLookup(canonical)
+            rec = c ? toStudentShape(c) : (canonicalRows.get(canonical) ? toStudentShape(canonicalRows.get(canonical)) : null)
+        }
+        if (rec) out.set(sid, rec)
+        else if (!_unresolvedLogged.has(sid)) {
+            _unresolvedLogged.add(sid)
+            console.warn(`[resolveStudents] no match for ${sid}${context ? ` (${context})` : ''}`)
+        }
     }
     return out
 }
@@ -476,6 +642,7 @@ export async function doRefresh() {
         cache.isSyncing = true
         cache.lastSyncAttempt = Date.now()
         console.log('🔄 Thinkific sync starting...')
+        let aliasReport = { attempted: 0, written: 0, failed: 0 }
         try {
             const { apiKey, subdomain } = await getThinkificCredentials()
 
@@ -554,6 +721,12 @@ export async function doRefresh() {
 
             console.log(`📥 Fetched ${allEnrollments.length} total enrollments`)
             rawEnrollmentCount = allEnrollments.length
+
+            // Harvest enrollment-id → user-id aliases from EVERY enrollment, before
+            // the WL101 course filter below, so roster ids that point at another
+            // course still resolve. Costs no extra API calls.
+            aliasReport = await upsertAliases(allEnrollments, 'enrollment_sync')
+            console.log(`🔗 Aliases: ${aliasReport.written}/${aliasReport.attempted} enrollment→user mappings upserted${aliasReport.failed ? `, ${aliasReport.failed} failed` : ''}`)
 
             // Fetch all users separately — v1 enrollments are flat (no embedded user object)
             console.log('👥 Fetching all users from Thinkific...')
@@ -736,7 +909,8 @@ export async function doRefresh() {
   Rows written:       ${writeReport.written}/${writeReport.attempted}
   Rows FAILED:        ${writeReport.failed}
   Dropped (invalid):  ${dropped}
-  Unknown campus:     ${unknownCampus}`
+  Unknown campus:     ${unknownCampus}
+  ID aliases upserted:${aliasReport.written}/${aliasReport.attempted}`
             if (writesBroken) console.error(`❌ ${summary}`)
             else console.log(`✅ ${summary}`)
 
@@ -747,6 +921,8 @@ export async function doRefresh() {
                 processed: deduped.length,
                 dropped,
                 unknownCampus,
+                aliasesAttempted: aliasReport.attempted,
+                aliasesWritten: aliasReport.written,
                 // Write-path health — the thing that silently failed for two months.
                 rowsAttempted: writeReport.attempted,
                 rowsWritten: writeReport.written,

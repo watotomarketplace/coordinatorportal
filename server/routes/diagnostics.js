@@ -5,8 +5,9 @@ import { fileURLToPath } from 'url'
 import axios from 'axios'
 import { userHasAnyRole, requireAdmin } from '../middleware/rbac.js'
 import { dbGet, dbAll, IS_POSTGRES } from '../db/init.js'
-import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById, resolveStudent } from '../services/thinkific.js'
+import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById, resolveStudent, resolveStudentMap, upsertAliases } from '../services/thinkific.js'
 import { thinkificRest, getThinkificAuthMode } from '../services/thinkific-auth.js'
+import { logAudit } from '../services/audit.js'
 import { getLogs } from '../lib/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -185,6 +186,59 @@ async function columnType(table, column) {
     } catch (e) { return `error: ${e.message}` }
 }
 
+/**
+ * POST /api/diagnostics/rebuild-aliases  (Admin only)
+ *
+ * Rebuilds thinkific_id_aliases by paging /enrollments and harvesting each
+ * record's (id → user_id) mapping. Same pass the full sync performs, without the
+ * student upserts — so the mapping can be repaired without a full sync.
+ * Writes only to thinkific_id_aliases. Audit-logged. Never returns a token.
+ */
+router.post('/rebuild-aliases', requireAdmin, async (req, res) => {
+    const user = req.session.user
+    try {
+        const mode = await getThinkificAuthMode()
+        const totals = { attempted: 0, written: 0, failed: 0 }
+        let page = 1, fetched = 0, hasMore = true, lastStatus = null
+
+        while (hasMore) {
+            const r = await thinkificRest('get', '/enrollments', { params: { page, limit: 250 } }, { label: 'rebuild-aliases' })
+            lastStatus = r.status
+            if (r.status !== 200) break
+            const items = r.data?.items || r.data?.data || []
+            fetched += items.length
+
+            const rep = await upsertAliases(items, 'backfill')
+            totals.attempted += rep.attempted
+            totals.written += rep.written
+            totals.failed += rep.failed
+
+            const pg = r.data?.meta?.pagination || r.data?.pagination || null
+            const totalPages = pg?.total_pages || pg?.num_pages || null
+            hasMore = items.length >= 250 && (!totalPages || page < totalPages)
+            page++
+            if (page > 100) { console.warn('[rebuild-aliases] 100-page safety stop'); break }
+            if (hasMore) await new Promise(r2 => setTimeout(r2, 150))
+        }
+
+        await logAudit(user.name, user.role, 'rebuild_aliases', JSON.stringify({
+            enrollments_fetched: fetched, pages: page - 1, ...totals,
+        }))
+
+        res.json({
+            success: true,
+            auth_mode: mode,                 // mode only — never the token
+            enrollments_fetched: fetched,
+            pages: page - 1,
+            last_http_status: lastStatus,
+            aliases: totals,
+        })
+    } catch (e) {
+        console.error('[diagnostics] rebuild-aliases error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
 router.get('/resolve-trace', requireAdmin, async (req, res) => {
     try {
         const ids = (req.query.ids ? String(req.query.ids).split(',') : DEFAULT_TRACE_IDS)
@@ -334,10 +388,64 @@ router.get('/resolve-trace', requireAdmin, async (req, res) => {
             live.skipped = true
         }
 
+        // ── 2e. Snapshot remediation impact (REPORT ONLY — changes nothing) ──
+        // Recommendations submitted while ~97% of members were orphaned froze a
+        // false online_progress: 0. Quantify, do not modify.
+        const snapshot_remediation = { note: 'REPORT ONLY — no rows modified. Data-correction decision is Ivan/Joshua.' }
+        try {
+            const thrRow = await dbGet("SELECT value FROM system_settings WHERE key = 'graduation_online_threshold'")
+            const threshold = parseInt(thrRow?.value ?? '100', 10) || 100
+            snapshot_remediation.online_threshold = threshold
+
+            const zeroRows = await dbAll(
+                `SELECT id, student_thinkific_id, student_name, online_progress, online_met, status
+                 FROM graduation_verifications
+                 WHERE online_progress = 0 OR online_progress IS NULL`
+            )
+            snapshot_remediation.rows_stored_zero = zeroRows.length
+
+            const resolvedMap = await resolveStudentMap(
+                zeroRows.map(r => r.student_thinkific_id), 'snapshot-remediation'
+            )
+            let wouldChange = 0, wouldFlipMet = 0
+            const sample = []
+            for (const r of zeroRows) {
+                const rec = resolvedMap.get(String(r.student_thinkific_id ?? '').trim())
+                const resolvedProgress = rec ? (Number(rec.progress) || 0) : 0
+                if (resolvedProgress > 0) {
+                    wouldChange++
+                    if (resolvedProgress >= threshold && !r.online_met) wouldFlipMet++
+                    if (sample.length < 10) {
+                        sample.push({
+                            verification_id: r.id,
+                            student_name: r.student_name,
+                            roster_id: r.student_thinkific_id,
+                            stored_online_progress: r.online_progress,
+                            resolved_online_progress: resolvedProgress,
+                            status: r.status,
+                        })
+                    }
+                }
+            }
+            snapshot_remediation.rows_now_resolving_nonzero = wouldChange
+            snapshot_remediation.rows_that_would_flip_online_met = wouldFlipMet
+            snapshot_remediation.sample = sample
+        } catch (e) { snapshot_remediation.error = e.message }
+
+        // Alias table health
+        const aliases = {}
+        try {
+            aliases.row_count = parseInt((await dbGet('SELECT COUNT(*) AS n FROM thinkific_id_aliases'))?.n ?? 0, 10)
+            aliases.max_updated_at = (await dbGet('SELECT MAX(updated_at) AS m FROM thinkific_id_aliases'))?.m ?? null
+            aliases.by_source = await dbAll('SELECT source, COUNT(*) AS n FROM thinkific_id_aliases GROUP BY source')
+        } catch (e) { aliases.error = e.message }
+
         res.json({
             success: true,
             dialect: IS_POSTGRES ? 'postgres' : 'sqlite',
-            how_to_read: 'If thinkific_students has NO 77x values in either column → W1 (rows absent). If 77x exists in one column but the roster looks up the other → W2 (wrong key). 1e says which id Thinkific treats as canonical.',
+            how_to_read: 'orphan_count/orphan_pct is the headline. Rosters store Thinkific ENROLLMENT ids; thinkific_students is keyed by USER id. thinkific_id_aliases bridges them — if aliases.row_count is 0, run POST /api/diagnostics/rebuild-aliases (or a full sync) first.',
+            aliases,
+            snapshot_remediation,
             column_types,
             traces,
             id_shape_histogram,

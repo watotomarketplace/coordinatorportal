@@ -706,6 +706,26 @@ async function runMigrations() {
     await dbRun(seedSetting, ['graduation_online_threshold', '100'])
   } catch (_) {}
 
+  // ─── Thinkific id alias map ───────────────────────────────────────────────
+  // Rosters store Thinkific ENROLLMENT ids while thinkific_students is keyed by
+  // Thinkific USER id — different id spaces, so lookups never matched. This maps
+  // any non-user id seen on a roster to its canonical user id. Purely additive:
+  // no existing id is rewritten. Populated by the enrollment sync (zero extra
+  // API calls) since every enrollment record carries both id and user_id.
+  try {
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS thinkific_id_aliases (
+        alias_id TEXT PRIMARY KEY,
+        thinkific_user_id TEXT NOT NULL,
+        source TEXT,
+        course_name TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_tia_user ON thinkific_id_aliases(thinkific_user_id)')
+  } catch (e) { console.error('⚠️ thinkific_id_aliases migration failed:', e.message) }
+
   // ─── Gate 1: Thinkific Assignment Submission mirror ───────────────────────
   // Local mirror of Thinkific GraphQL assignment submissions so coordinators can
   // review + pass/fail. A pass writes an APPROVE back to Thinkific (irreversible)
@@ -1114,6 +1134,7 @@ const NO_ID_TABLES = new Set([
   'system_settings',           // PK key TEXT
   'student_campus_overrides',  // PK thinkific_user_id TEXT
   'user_secondary_roles',      // UNIQUE(user_id, role), no id
+  'thinkific_id_aliases',      // PK alias_id TEXT
 ])
 
 // Extract the target table from an INSERT (handles "INSERT OR REPLACE/IGNORE INTO").

@@ -3,7 +3,7 @@ import multer from 'multer'
 import { parse as parseCsv } from 'csv-parse/sync'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, requireAdmin, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
-import { getStudentById, resolveStudent } from '../services/thinkific.js'
+import { getStudentById, resolveStudentMap } from '../services/thinkific.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } })
 
@@ -237,15 +237,17 @@ router.get('/:id', requireAuth, async (req, res) => {
             WHERE fgm.formation_group_id = ?
         `, [req.params.id])
 
-        members = await Promise.all(members.map(async m => {
-            // Single shared resolver: cache → thinkific_user_id → student_id, all
-            // compared as trimmed strings. Unlike the old fallback (which selected
-            // only name/email) this also returns progress + risk, so a cache miss
-            // no longer renders "— Progress".
-            const detail = await resolveStudent(m.student_id, `group ${req.params.id}`)
+        // Batched shared resolver (cache → user_id → student_id → enrollment-id
+        // alias), keyed by the original roster id — one batch, not one query per
+        // member. Returns progress + risk, so a cache miss no longer renders "—".
+        const resolvedMembers = await resolveStudentMap(
+            members.map(m => m.student_id), `group ${req.params.id}`
+        )
+        members = members.map(m => {
+            const detail = resolvedMembers.get(String(m.student_id ?? '').trim()) || null
             const percentage = m.total > 0 ? Math.round((m.attended / m.total) * 100) : 0
             return { ...m, ...detail, percentage }
-        }))
+        })
 
         const reports = await dbAll(`
             SELECT id, week_number, attendance_count, engagement_level, submitted_at
@@ -344,16 +346,29 @@ router.post('/:id/members', requireAuth, async (req, res) => {
         const { student_id, student_name, student_email } = req.body
         if (!student_id) return res.status(400).json({ success: false, message: 'student_id required' })
 
-        // Prevent duplicate membership
+        // Store the CANONICAL Thinkific user id. Historically this stored whatever
+        // the client sent, which was usually an ENROLLMENT id — the reason ~97% of
+        // members could never be matched to thinkific_students. Resolve through the
+        // shared resolver (which understands enrollment-id aliases) and persist the
+        // canonical user id for NEW members. Existing rows are never rewritten; the
+        // alias table keeps them resolvable.
+        const resolvedNew = await resolveStudentMap([student_id], `add-member group ${groupId}`)
+        const canonical = resolvedNew.get(String(student_id).trim())?.userId
+        const storedId = canonical ? String(canonical) : String(student_id)
+        if (canonical && storedId !== String(student_id)) {
+            console.log(`[formation-groups] add-member: translated ${student_id} → canonical user id ${storedId}`)
+        }
+
+        // Prevent duplicate membership (check both the raw and canonical id)
         const existing = await dbGet(
-            'SELECT id FROM formation_group_members WHERE formation_group_id = ? AND student_id = ?',
-            [groupId, String(student_id)]
+            'SELECT id FROM formation_group_members WHERE formation_group_id = ? AND (student_id = ? OR student_id = ?)',
+            [groupId, storedId, String(student_id)]
         )
         if (existing) return res.status(400).json({ success: false, message: 'Student is already in this group' })
 
         await dbRun(
             'INSERT INTO formation_group_members (formation_group_id, student_id, student_name, student_email) VALUES (?, ?, ?, ?)',
-            [groupId, String(student_id), student_name || '', student_email || '']
+            [groupId, storedId, student_name || '', student_email || '']
         )
         res.json({ success: true })
     } catch (error) {

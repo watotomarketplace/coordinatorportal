@@ -5,7 +5,8 @@ import { fileURLToPath } from 'url'
 import axios from 'axios'
 import { userHasAnyRole, requireAdmin } from '../middleware/rbac.js'
 import { dbGet, dbAll, IS_POSTGRES } from '../db/init.js'
-import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById } from '../services/thinkific.js'
+import { getCacheStatus, getStudentData, getRawCache, getRawEnrollmentCount, normalizeCelebrationPoint, processEnrollment, getStudentById, resolveStudent } from '../services/thinkific.js'
+import { thinkificRest, getThinkificAuthMode } from '../services/thinkific-auth.js'
 import { getLogs } from '../lib/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -132,6 +133,220 @@ router.get('/schema-check', requireAdmin, async (req, res) => {
         })
     } catch (e) {
         console.error('[diagnostics] schema-check error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
+/**
+ * GET /api/diagnostics/resolve-trace  (Admin only, READ-ONLY — performs no writes)
+ *
+ * Answers with DATA, not inference, why most group members resolve to 0% progress:
+ *   W1 = rows genuinely absent from thinkific_students
+ *   W2 = rows present but looked up by the wrong identity column
+ *
+ * ?ids=a,b,c   optional comma-separated ids to trace (defaults below)
+ * ?skipLive=1  skip the live Thinkific calls (1e)
+ *
+ * Reports schema/counts/progress only. NEVER returns a token — auth mode only.
+ */
+const DEFAULT_TRACE_IDS = [
+    '777173231', '779197335', '777173540', '776483845',  // known failing (77x)
+    '240655086', '240396230',                             // known working (240x)
+]
+
+// SUBSTR + CAST + TRIM all behave the same on Postgres and SQLite.
+const AS_TEXT = (col) => `TRIM(CAST(${col} AS TEXT))`
+
+async function idPrefixHistogram(table, column) {
+    try {
+        const rows = await dbAll(
+            `SELECT SUBSTR(${AS_TEXT(column)}, 1, 3) AS prefix, COUNT(*) AS n
+             FROM ${table} WHERE ${column} IS NOT NULL
+             GROUP BY SUBSTR(${AS_TEXT(column)}, 1, 3)
+             ORDER BY COUNT(*) DESC`
+        )
+        return rows.map(r => ({ prefix: r.prefix, n: parseInt(r.n, 10) }))
+    } catch (e) {
+        return { error: e.message }
+    }
+}
+
+async function columnType(table, column) {
+    try {
+        if (IS_POSTGRES) {
+            const r = await dbGet(
+                'SELECT data_type FROM information_schema.columns WHERE table_name = ? AND column_name = ?',
+                [table, column]
+            )
+            return r?.data_type || 'unknown'
+        }
+        const cols = await dbAll(`PRAGMA table_info(${table})`)
+        return cols.find(c => c.name === column)?.type || 'unknown'
+    } catch (e) { return `error: ${e.message}` }
+}
+
+router.get('/resolve-trace', requireAdmin, async (req, res) => {
+    try {
+        const ids = (req.query.ids ? String(req.query.ids).split(',') : DEFAULT_TRACE_IDS)
+            .map(s => String(s).trim()).filter(Boolean)
+
+        // ── 1a. Per-ID trace ────────────────────────────────────────────────
+        const traces = []
+        for (const id of ids) {
+            const t = { id }
+            try {
+                t.by_student_id_exact = await dbGet('SELECT student_id, thinkific_user_id, progress, name, celebration_point FROM thinkific_students WHERE student_id = ?', [id]) || null
+                t.by_student_id_trimmed = await dbGet(`SELECT student_id, thinkific_user_id, progress, name, celebration_point FROM thinkific_students WHERE ${AS_TEXT('student_id')} = ?`, [id]) || null
+                t.by_thinkific_user_id_exact = await dbGet('SELECT student_id, thinkific_user_id, progress, name, celebration_point FROM thinkific_students WHERE thinkific_user_id = ?', [id]) || null
+                t.by_thinkific_user_id_trimmed = await dbGet(`SELECT student_id, thinkific_user_id, progress, name, celebration_point FROM thinkific_students WHERE ${AS_TEXT('thinkific_user_id')} = ?`, [id]) || null
+            } catch (e) { t.db_error = e.message }
+
+            const cached = getStudentById(id)
+            t.in_memory_cache = cached
+                ? {
+                    found: true,
+                    matched_on: String(cached.id) === id ? 'id' : (String(cached.userId) === id ? 'userId' : 'other'),
+                    progress: cached.progress, name: cached.name,
+                }
+                : { found: false }
+
+            try {
+                const r = await resolveStudent(id, 'resolve-trace')
+                t.resolveStudent_result = r ? { id: r.id, userId: r.userId, name: r.name, progress: r.progress, celebration_point: r.celebration_point } : null
+            } catch (e) { t.resolveStudent_result = { error: e.message } }
+
+            // Is this id present anywhere in the roster tables?
+            try {
+                const gm = await dbGet(`SELECT COUNT(*) AS n FROM group_members WHERE ${AS_TEXT('student_thinkific_id')} = ?`, [id])
+                const fgm = await dbGet(`SELECT COUNT(*) AS n FROM formation_group_members WHERE ${AS_TEXT('student_id')} = ?`, [id])
+                t.roster_presence = { group_members: parseInt(gm?.n || 0, 10), formation_group_members: parseInt(fgm?.n || 0, 10) }
+            } catch (e) { t.roster_presence = { error: e.message } }
+
+            traces.push(t)
+        }
+
+        // ── 1a(ii). Column types — a text/integer mismatch is a prime suspect ─
+        const column_types = {
+            'thinkific_students.student_id': await columnType('thinkific_students', 'student_id'),
+            'thinkific_students.thinkific_user_id': await columnType('thinkific_students', 'thinkific_user_id'),
+            'group_members.student_thinkific_id': await columnType('group_members', 'student_thinkific_id'),
+            'formation_group_members.student_id': await columnType('formation_group_members', 'student_id'),
+        }
+
+        // ── 1b. ID-shape histogram — THE DECISIVE QUERY ──────────────────────
+        const id_shape_histogram = {
+            'group_members.student_thinkific_id': await idPrefixHistogram('group_members', 'student_thinkific_id'),
+            'formation_group_members.student_id': await idPrefixHistogram('formation_group_members', 'student_id'),
+            'thinkific_students.student_id': await idPrefixHistogram('thinkific_students', 'student_id'),
+            'thinkific_students.thinkific_user_id': await idPrefixHistogram('thinkific_students', 'thinkific_user_id'),
+        }
+
+        // ── 1c. Are student_id and thinkific_user_id the same value? ─────────
+        const two_columns = {}
+        try {
+            two_columns.sample = await dbAll('SELECT student_id, thinkific_user_id, name, progress FROM thinkific_students LIMIT 10')
+            const same = await dbGet(`SELECT COUNT(*) AS n FROM thinkific_students WHERE ${AS_TEXT('student_id')} = ${AS_TEXT('thinkific_user_id')}`)
+            const diff = await dbGet(`SELECT COUNT(*) AS n FROM thinkific_students WHERE ${AS_TEXT('student_id')} <> ${AS_TEXT('thinkific_user_id')}`)
+            const nullTuid = await dbGet('SELECT COUNT(*) AS n FROM thinkific_students WHERE thinkific_user_id IS NULL')
+            two_columns.identical_count = parseInt(same?.n || 0, 10)
+            two_columns.different_count = parseInt(diff?.n || 0, 10)
+            two_columns.null_thinkific_user_id = parseInt(nullTuid?.n || 0, 10)
+        } catch (e) { two_columns.error = e.message }
+
+        // ── 1d. Orphans: group members matching NEITHER column ───────────────
+        const orphans = {}
+        try {
+            const totalRow = await dbGet('SELECT COUNT(DISTINCT student_thinkific_id) AS n FROM group_members WHERE student_thinkific_id IS NOT NULL')
+            const total = parseInt(totalRow?.n || 0, 10)
+            const orphanSql = `
+                SELECT DISTINCT ${AS_TEXT('gm.student_thinkific_id')} AS sid
+                FROM group_members gm
+                WHERE gm.student_thinkific_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM thinkific_students ts
+                    WHERE ${AS_TEXT('ts.thinkific_user_id')} = ${AS_TEXT('gm.student_thinkific_id')}
+                       OR ${AS_TEXT('ts.student_id')} = ${AS_TEXT('gm.student_thinkific_id')}
+                  )`
+            const rows = await dbAll(orphanSql)
+            const byPrefix = {}
+            for (const r of rows) {
+                const p = String(r.sid || '').slice(0, 3)
+                byPrefix[p] = (byPrefix[p] || 0) + 1
+            }
+            orphans.total_distinct_group_member_ids = total
+            orphans.orphan_count = rows.length
+            orphans.orphan_pct = total > 0 ? Math.round((rows.length / total) * 1000) / 10 : 0
+            orphans.orphan_by_prefix = byPrefix
+            orphans.sample = rows.slice(0, 15).map(r => r.sid)
+        } catch (e) { orphans.error = e.message }
+
+        // ── 1e. Live Thinkific check (the decider) ──────────────────────────
+        const live = { auth_mode: null, checked: [] }
+        if (req.query.skipLive !== '1') {
+            try {
+                live.auth_mode = await getThinkificAuthMode()   // mode only, never the token
+                const failing = ids.filter(i => i.startsWith('77')).slice(0, 3)
+                const probeIds = failing.length ? failing : ids.slice(0, 3)
+                for (const id of probeIds) {
+                    const entry = { id }
+                    try {
+                        const u = await thinkificRest('get', `/users/${id}`, {}, { label: 'trace-user' })
+                        entry.users_endpoint = { status: u.status, exists: u.status === 200 }
+                        if (u.status === 200) {
+                            entry.users_endpoint.name = `${u.data?.first_name || ''} ${u.data?.last_name || ''}`.trim()
+                            entry.users_endpoint.email = u.data?.email || null
+                            entry.users_endpoint.company = u.data?.company ?? null
+                        }
+                    } catch (e) { entry.users_endpoint = { error: e.message } }
+
+                    try {
+                        const en = await thinkificRest('get', `/enrollments`, { params: { 'query[user_id]': id, limit: 25 } }, { label: 'trace-enrollments' })
+                        const items = en.data?.items || en.data?.data || []
+                        entry.enrollments = {
+                            status: en.status,
+                            count: items.length,
+                            courses: items.map(x => ({
+                                course_name: x.course_name ?? x.product_name ?? null,
+                                course_id: x.course_id ?? null,
+                                enrollment_id: x.id ?? null,
+                                percentage_completed_raw: x.percentage_completed,
+                                raw_type: typeof x.percentage_completed,
+                                completed_at: x.completed_at ?? null,
+                            })),
+                        }
+                    } catch (e) { entry.enrollments = { error: e.message } }
+
+                    // Is this id actually an ENROLLMENT id rather than a user id?
+                    try {
+                        const e1 = await thinkificRest('get', `/enrollments/${id}`, {}, { label: 'trace-enrollment-by-id' })
+                        entry.enrollment_by_id = {
+                            status: e1.status,
+                            is_enrollment_id: e1.status === 200,
+                            user_id: e1.status === 200 ? (e1.data?.user_id ?? null) : null,
+                            course_name: e1.status === 200 ? (e1.data?.course_name ?? null) : null,
+                        }
+                    } catch (e) { entry.enrollment_by_id = { error: e.message } }
+
+                    live.checked.push(entry)
+                }
+            } catch (e) { live.error = e.message }
+        } else {
+            live.skipped = true
+        }
+
+        res.json({
+            success: true,
+            dialect: IS_POSTGRES ? 'postgres' : 'sqlite',
+            how_to_read: 'If thinkific_students has NO 77x values in either column → W1 (rows absent). If 77x exists in one column but the roster looks up the other → W2 (wrong key). 1e says which id Thinkific treats as canonical.',
+            column_types,
+            traces,
+            id_shape_histogram,
+            two_columns,
+            orphans,
+            live_thinkific: live,
+        })
+    } catch (e) {
+        console.error('[diagnostics] resolve-trace error:', e.message)
         res.status(500).json({ success: false, message: e.message })
     }
 })

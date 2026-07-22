@@ -3,7 +3,7 @@ import multer from 'multer'
 import { parse as parseCsv } from 'csv-parse/sync'
 import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, requireAdmin, requireAdminOrTechSupport, requireGroupManager, applyCampusScope, CAMPUS_SCOPED_ROLES, GLOBAL_ROLES, userHasAnyRole } from '../middleware/rbac.js'
-import { getStudentById } from '../services/thinkific.js'
+import { getStudentById, resolveStudent } from '../services/thinkific.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } })
 
@@ -238,15 +238,11 @@ router.get('/:id', requireAuth, async (req, res) => {
         `, [req.params.id])
 
         members = await Promise.all(members.map(async m => {
-            let detail = getStudentById(m.student_id)
-            // Cache miss: try DB directly so members still show names when sync hasn't run
-            if (!detail || !detail.name) {
-                const dbRow = await dbGet(
-                    'SELECT name, email FROM thinkific_students WHERE thinkific_user_id = ?',
-                    [m.student_id]
-                )
-                if (dbRow?.name) detail = { ...detail, name: dbRow.name, email: detail?.email || dbRow.email }
-            }
+            // Single shared resolver: cache → thinkific_user_id → student_id, all
+            // compared as trimmed strings. Unlike the old fallback (which selected
+            // only name/email) this also returns progress + risk, so a cache miss
+            // no longer renders "— Progress".
+            const detail = await resolveStudent(m.student_id, `group ${req.params.id}`)
             const percentage = m.total > 0 ? Math.round((m.attended / m.total) * 100) : 0
             return { ...m, ...detail, percentage }
         }))

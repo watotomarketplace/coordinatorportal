@@ -3,32 +3,28 @@ import { getStudentData, getChartData, getStats, forceRefresh, getPaginatedUsers
 // getPaginatedUsers provides DB-backed server-side pagination for the students list
 import { getNotes, addNote } from '../services/notes.js'
 import { getStudentTags } from '../services/tags.js'
-import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { requireAuth, applyCampusScope, applyFacilitatorGroupScope, isGroupScoped, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { getGroupRosterStudents } from '../services/roster.js'
 import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
 
 // Get dashboard stats (Total Enrolled, Active, etc.)
-router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
+router.get('/stats', requireAuth, applyFacilitatorGroupScope, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
 
-        const result = await getStudentData(celebrationPoint)
-        let students = result.students || []
-
-        // Facilitators: filter to only students in their assigned groups
-        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-            const members = await dbAll(`
-                SELECT fgm.student_id
-                FROM formation_group_members fgm
-                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
-                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
-            `, [user.id, user.id])
-
-            const memberIds = new Set(members.map(m => String(m.student_id)))
-            students = students.filter(s => memberIds.has(String(s.id || s.userId)))
+        // Facilitator/CoFacilitator: build KPIs from their own group roster only
+        // (group-scoped, not campus-scoped). Empty roster ⇒ empty stats, never a
+        // campus/global fallback.
+        let students
+        if (isGroupScoped(req)) {
+            students = await getGroupRosterStudents(req.scopedGroupIds, 'stats')
+        } else {
+            const result = await getStudentData(celebrationPoint)
+            students = result.students || []
         }
 
         const stats = getStats(students)
@@ -154,25 +150,48 @@ router.get('/stats', requireAuth, applyCampusScope, async (req, res) => {
 })
 
 // Get student data
-router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
+router.get('/students', requireAuth, applyFacilitatorGroupScope, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const celebrationPoint = req.scopedCelebrationPoint
         const { limit, page, search, sort, order, risk_category } = req.query
 
+        // Facilitator/CoFacilitator: GROUP-scoped, never campus-scoped (PRD §3).
+        // Built from their own roster and resolved via the shared resolver, so a
+        // member whose campus is blank/'Unknown' is still shown. An empty roster
+        // returns an honest empty list — never a campus/global fallback.
+        if (isGroupScoped(req)) {
+            let students = await getGroupRosterStudents(req.scopedGroupIds, 'students')
+            if (search) {
+                const q = String(search).toLowerCase()
+                students = students.filter(s =>
+                    (s.name || '').toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q))
+            }
+            if (risk_category) students = students.filter(s => s.risk_category === risk_category)
+
+            if (limit) {
+                const lim = Math.min(parseInt(limit, 10), 200)
+                const pg = parseInt(page || 1, 10)
+                const offset = (pg - 1) * lim
+                return res.json({
+                    success: true,
+                    data: students.slice(offset, offset + lim),
+                    total: students.length,
+                    offset,
+                    meta: { total: students.length, totalPages: Math.ceil(students.length / lim), currentPage: pg, limit: lim }
+                })
+            }
+            return res.json({
+                success: true,
+                students,
+                stats: getStats(students),
+                chartData: getChartData(students),
+                lastUpdated: Date.now()
+            })
+        }
+
         // Paginated mode: client requested server-side pagination
         if (limit) {
-            // Facilitators are scoped to their group members — load IDs first
-            let facilitatorMemberIds = null
-            if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-                const members = await dbAll(`
-                    SELECT fgm.student_id FROM formation_group_members fgm
-                    JOIN formation_groups fg ON fgm.formation_group_id = fg.id
-                    WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
-                `, [user.id, user.id])
-                facilitatorMemberIds = members.map(m => String(m.student_id))
-            }
-
             const result = await getPaginatedUsers({
                 page: parseInt(page || 1, 10),
                 limit: Math.min(parseInt(limit, 10), 200),
@@ -183,11 +202,7 @@ router.get('/students', requireAuth, applyCampusScope, async (req, res) => {
                 order: order || 'asc'
             })
 
-            // Apply facilitator scope (post-filter on paginated results, acceptable for small groups)
-            if (facilitatorMemberIds) {
-                const idSet = new Set(facilitatorMemberIds)
-                result.users = (result.users || []).filter(s => idSet.has(String(s.id || s.userId)))
-            }
+            // (Facilitator/CoFacilitator are handled by the group-scoped branch above.)
 
             return res.json({
                 success: true,

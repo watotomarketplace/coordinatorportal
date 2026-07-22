@@ -1,12 +1,13 @@
 import express from 'express'
 import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getStudentData, getStats, getChartData } from '../services/thinkific.js'
-import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { requireAuth, applyCampusScope, applyFacilitatorGroupScope, isGroupScoped, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { getGroupRosterStudents } from '../services/roster.js'
 import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
 
-router.get('/summary', requireAuth, applyCampusScope, async (req, res) => {
+router.get('/summary', requireAuth, applyFacilitatorGroupScope, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const isGlobal = GLOBAL_ROLES.includes(user.role)
@@ -19,27 +20,20 @@ router.get('/summary', requireAuth, applyCampusScope, async (req, res) => {
         }
 
         // --- 1. Thinkific Data Aggregation ---
-        const thinkificData = await getStudentData(campus)
-        let students = thinkificData.students || []
-        
+        let students
         let facilFilter = ''
         let facilParam = []
 
-        // Scope students and groups for facilitator
-        if (user.role === 'Facilitator') {
+        // Facilitator/CoFacilitator: GROUP-scoped (PRD §3) — roster only, no campus
+        // filter, so members whose campus is blank/'Unknown' still count. Empty
+        // roster ⇒ empty KPIs, never a campus/global fallback.
+        if (isGroupScoped(req)) {
+            students = await getGroupRosterStudents(req.scopedGroupIds, 'dashboard/summary')
             facilFilter = 'AND (fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?)'
             facilParam = [user.id, user.id]
-
-            const members = await dbAll(`
-                SELECT fgm.student_id, fgm.student_email
-                FROM formation_group_members fgm
-                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
-                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
-            `, [user.id, user.id])
-            const memberIds = new Set(members.map(m => String(m.student_id)))
-            const memberEmails = new Set(members.filter(m => m.student_email).map(m => m.student_email.toLowerCase()))
-            
-            students = students.filter(s => (s.id && memberIds.has(String(s.id))) || (s.email && memberEmails.has(s.email.toLowerCase())))
+        } else {
+            const thinkificData = await getStudentData(campus)
+            students = thinkificData.students || []
         }
 
         const stats = getStats(students)

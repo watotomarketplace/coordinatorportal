@@ -1,7 +1,8 @@
 import express from 'express'
 import { dbAll, dbGet, IS_POSTGRES } from '../db/init.js'
 import { getStudentData } from '../services/thinkific.js'
-import { requireAuth, applyCampusScope, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { requireAuth, applyCampusScope, applyFacilitatorGroupScope, isGroupScoped, GLOBAL_ROLES } from '../middleware/rbac.js'
+import { getGroupRosterStudents } from '../services/roster.js'
 import { getCache, setCache } from '../services/cache.js'
 
 const router = express.Router()
@@ -12,7 +13,7 @@ const router = express.Router()
  * Uses: Thinkific in-memory cache, weekly_reports, group_sessions, session_attendance.
  * Cache TTL: 5 minutes.
  */
-router.get('/', requireAuth, applyCampusScope, async (req, res) => {
+router.get('/', requireAuth, applyFacilitatorGroupScope, applyCampusScope, async (req, res) => {
     try {
         const user = req.session.user
         const isGlobal = GLOBAL_ROLES.includes(user.role)
@@ -23,20 +24,17 @@ router.get('/', requireAuth, applyCampusScope, async (req, res) => {
         if (cached) return res.json(cached)
 
         // ── 1. Thinkific student stats ──────────────────────────────────────────
-        const thinkificData = await getStudentData(campus)
-        let students = thinkificData.students || []
-        console.log(`[Dashboard/all] Total students in cache: ${thinkificData.students?.length ?? 0}, after campus filter (${campus || 'global'}): ${students.length}`)
-
-        // Facilitator scope: limit to their group members
-        if (user.role === 'Facilitator' || user.role === 'CoFacilitator') {
-            const members = await dbAll(`
-                SELECT fgm.student_id
-                FROM formation_group_members fgm
-                JOIN formation_groups fg ON fgm.formation_group_id = fg.id
-                WHERE fg.facilitator_user_id = ? OR fg.co_facilitator_user_id = ?
-            `, [user.id, user.id])
-            const memberIds = new Set(members.map(m => String(m.student_id)))
-            students = students.filter(s => memberIds.has(String(s.id || s.userId)))
+        // Facilitator/CoFacilitator are GROUP-scoped (PRD §3): build straight from
+        // their roster, bypassing the campus filter entirely so members whose
+        // campus is blank/'Unknown' still count. Empty roster ⇒ empty KPIs.
+        let students
+        if (isGroupScoped(req)) {
+            students = await getGroupRosterStudents(req.scopedGroupIds, 'dashboard/all')
+            console.log(`[Dashboard/all] group-scoped: ${req.scopedGroupIds.length} group(s) → ${students.length} student(s)`)
+        } else {
+            const thinkificData = await getStudentData(campus)
+            students = thinkificData.students || []
+            console.log(`[Dashboard/all] Total students in cache: ${thinkificData.students?.length ?? 0}, after campus filter (${campus || 'global'}): ${students.length}`)
         }
 
         const total = students.length

@@ -5,6 +5,7 @@
  */
 
 import { CELEBRATION_POINTS } from '../constants/campuses.js'
+import { dbAll } from '../db/init.js'
 
 // --- Constants ---
 const CAMPUS_SCOPED_ROLES = ['Pastor', 'Coordinator', 'TechSupport', 'CoFacilitator', 'Facilitator']
@@ -117,6 +118,52 @@ function requireSubmissionReviewer(req, res, next) {
     next()
 }
 
+// ─── Facilitator group scope ───────────────────────────────────────────────
+// PRD §3: a Facilitator/CoFacilitator's real scope is their GROUP(S), not their
+// campus. Returns the group ids they lead: formation_groups.facilitator_user_id
+// / co_facilitator_user_id, unioned with users.assigned_groups (JSON array).
+async function resolveFacilitatorGroupIds(user) {
+    if (!user) return []
+    const ids = new Set()
+    try {
+        const rows = await dbAll(
+            'SELECT id FROM formation_groups WHERE facilitator_user_id = ? OR co_facilitator_user_id = ?',
+            [user.id, user.id]
+        )
+        for (const r of rows) if (r?.id != null) ids.add(Number(r.id))
+    } catch (e) {
+        console.warn('[rbac] resolveFacilitatorGroupIds query failed:', e.message)
+    }
+    try {
+        const assigned = typeof user.assigned_groups === 'string'
+            ? JSON.parse(user.assigned_groups || '[]')
+            : (user.assigned_groups || [])
+        for (const g of assigned) {
+            const n = Number(g)
+            if (Number.isFinite(n)) ids.add(n)
+        }
+    } catch (_) {}
+    return [...ids]
+}
+
+// Sets req.scopedGroupIds for Facilitator/CoFacilitator (an array, possibly
+// empty), and null for every other role. Does NOT change campus scoping.
+async function applyFacilitatorGroupScope(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
+    const user = req.session.user
+    if (userHasAnyRole(user, ['Facilitator', 'CoFacilitator']) && !userHasAnyRole(user, GLOBAL_ROLES)) {
+        req.scopedGroupIds = await resolveFacilitatorGroupIds(user)
+    } else {
+        req.scopedGroupIds = null
+    }
+    next()
+}
+
+// True when this request must be limited to the user's own group roster.
+function isGroupScoped(req) {
+    return Array.isArray(req.scopedGroupIds)
+}
+
 function applyCampusScope(req, res, next) {
     if (!req.session.user) return res.status(401).json({ success: false, message: 'Not authenticated' })
 
@@ -162,5 +209,8 @@ export {
     requireCanImport,
     requireGraduationApprover,
     requireSubmissionReviewer,
-    applyCampusScope
+    applyCampusScope,
+    resolveFacilitatorGroupIds,
+    applyFacilitatorGroupScope,
+    isGroupScoped
 }

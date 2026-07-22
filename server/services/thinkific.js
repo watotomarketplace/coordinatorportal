@@ -47,6 +47,21 @@ const VALID_CELEBRATION_POINTS = [
     'Ntinda', 'Online', 'Suubi'
 ]
 
+/**
+ * Single place that turns a Thinkific completion value into an integer 0–100.
+ * Thinkific v1 returns `percentage_completed` as a 0–1 fraction ("0.88"); some
+ * payloads already use 0–100. Accepts numbers and numeric strings.
+ *   0.88 → 88 · 88 → 88 · "0.5" → 50 · 1 → 100 · null → 0
+ * Returns 0 only when the source is genuinely zero/absent — never lets 0.88
+ * silently collapse to 0.
+ */
+export function normalizeProgress(raw) {
+    const n = typeof raw === 'number' ? raw : parseFloat(raw)
+    if (!Number.isFinite(n) || n <= 0) return 0
+    const pct = n <= 1 ? n * 100 : n   // ≤1 is a fraction (1 === 100%)
+    return Math.max(0, Math.min(100, Math.round(pct)))
+}
+
 export function normalizeCelebrationPoint(raw) {
     if (!raw) return 'Unknown'
     // Strip "Watoto Church" prefix (with optional comma/space after it)
@@ -219,6 +234,65 @@ export function getStudentById(id) {
     return (cache.data || []).find(s => String(s.id) === String(id) || String(s.userId) === String(id))
 }
 
+// ─── Single shared student resolver ────────────────────────────────────────
+// The one place that turns a member id (formation_group_members.student_id /
+// group_members.student_thinkific_id) into a student record. Tries, in order:
+//   1. in-memory cache (always fresh)      2. thinkific_students.thinkific_user_id
+//   3. thinkific_students.student_id
+// All comparisons are trimmed strings so integer-vs-TEXT and whitespace
+// mismatches stop failing silently. Returns null (and logs once) if unresolved.
+const _unresolvedLogged = new Set()
+
+function toStudentShape(s) {
+    if (!s) return null
+    // Cache objects and thinkific_students rows use different field names.
+    const progress = Number(s.progress) || 0
+    return {
+        id: String(s.id ?? s.student_id ?? '').trim(),
+        userId: String(s.userId ?? s.thinkific_user_id ?? s.student_id ?? '').trim(),
+        name: s.name || '',
+        email: s.email || '',
+        celebration_point: s.celebration_point || 'Unknown',
+        progress,
+        risk_score: s.risk_score ?? s.risk?.score ?? 0,
+        risk_category: s.risk_category || s.risk?.category || 'Healthy',
+    }
+}
+
+export async function resolveStudent(idLike, context = '') {
+    const sid = String(idLike ?? '').trim()
+    if (!sid) return null
+
+    if (!cache.data) loadCache()
+    const hit = (cache.data || []).find(s =>
+        String(s.id ?? '').trim() === sid || String(s.userId ?? '').trim() === sid)
+    if (hit) return toStudentShape(hit)
+
+    try {
+        let row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(thinkific_user_id) = ?', [sid])
+        if (!row) row = await dbGet('SELECT * FROM thinkific_students WHERE TRIM(student_id) = ?', [sid])
+        if (row) return toStudentShape(row)
+    } catch (e) {
+        console.warn('[resolveStudent] DB lookup failed:', e.message)
+    }
+
+    if (!_unresolvedLogged.has(sid)) {
+        _unresolvedLogged.add(sid)
+        console.warn(`[resolveStudent] no match for ${sid}${context ? ` (${context})` : ''}`)
+    }
+    return null
+}
+
+// Resolve many ids at once, dropping unresolved ones.
+export async function resolveStudents(ids, context = '') {
+    const out = []
+    for (const id of (ids || [])) {
+        const s = await resolveStudent(id, context)
+        if (s) out.push(s)
+    }
+    return out
+}
+
 async function loadCacheFromDB() {
     try {
         const rows = await dbAll('SELECT * FROM thinkific_students')
@@ -352,10 +426,7 @@ export function processEnrollment(enrollment) {
     const userId = String(user.id || enrollment.user_id || '')
     if (!userId) return null
 
-    const rawProgress = parseFloat(enrollment.percentage_completed) || 0
-    const progress = rawProgress <= 1.0
-        ? Math.round(rawProgress * 100)
-        : Math.round(rawProgress)
+    const progress = normalizeProgress(enrollment.percentage_completed)
 
     const rawCampus      = (user.company || '').trim()
     const celebrationPoint = normalizeCelebrationPoint(rawCampus)
@@ -992,8 +1063,7 @@ export async function updateSingleStudent(userId, enrollmentData = null, userDat
     const existing = { ...cache.data[idx] }
 
     if (enrollmentData) {
-        const rawProgress = parseFloat(enrollmentData.percentage_completed) || 0
-        const progress = rawProgress <= 1.0 ? Math.round(rawProgress * 100) : Math.round(rawProgress)
+        const progress = normalizeProgress(enrollmentData.percentage_completed)
         existing.progress = progress
         existing.percentage_completed = progress
         existing.lastActivity = enrollmentData.updated_at || existing.lastActivity

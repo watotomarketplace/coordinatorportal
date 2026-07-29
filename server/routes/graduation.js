@@ -12,10 +12,12 @@ import { dbGet, dbAll, dbRun } from '../db/init.js'
 import { requireAuth, applyCampusScope, requireGraduationApprover, userRoles, userHasAnyRole } from '../middleware/rbac.js'
 import { logAudit } from '../services/audit.js'
 import { resolveStudentMap } from '../services/thinkific.js'
+import { getAttendedSessionsByGroup } from '../services/attendance-calc.js'
 
 const router = express.Router()
 
 // Program criteria. Attendance requirement is fixed at 13 of 16 weeks.
+// Mirrors server/services/attendance-calc.js (shared attendance definition).
 // TODO(WL101): promote REQUIRED_WEEKS to a system_setting if it needs tuning.
 const REQUIRED_WEEKS = 13
 const TOTAL_WEEKS = 16
@@ -78,19 +80,11 @@ async function computeRoster(group, threshold) {
         [groupId]
     )
 
-    // Attended weeks per participant (distinct weeks where present and group met)
-    const attRows = await dbAll(
-        `SELECT gm.student_thinkific_id,
-                COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0
-                                    THEN gs.week_number END) AS attended_weeks
-         FROM group_members gm
-         LEFT JOIN session_attendance sa ON sa.group_member_id = gm.id
-         LEFT JOIN group_sessions   gs ON gs.id = sa.session_id
-         WHERE gm.formation_group_id = ? AND gm.active = 1
-         GROUP BY gm.student_thinkific_id`,
-        [groupId]
-    )
-    const attMap = new Map(attRows.map(r => [String(r.student_thinkific_id), Number(r.attended_weeks) || 0]))
+    // Attendance via the SHARED helper: distinct SESSIONS attended (capped at
+    // TOTAL_WEEKS), not distinct week_number. Counting week_number collapsed
+    // duplicate labels and made a 16/16 participant read 3/16. The Attendance and
+    // Formation-Groups pages use this same definition, so they cannot disagree.
+    const attMap = await getAttendedSessionsByGroup(groupId, TOTAL_WEEKS)
 
     // Existing verification rows for this group/cohort
     const verRows = await dbAll(
@@ -333,24 +327,125 @@ router.post('/review/:id', requireAuth, requireGraduationApprover, async (req, r
 })
 
 // ─── GET /summary ─────────────────────────────────────────────────────────
-// Counts by campus/group/status for Admin/Leadership/Coordinator.
+// Graduation Dashboard data. Every ACTIVE roster member (group_members.active=1)
+// falls into exactly one bucket. Computed as roster LEFT JOIN verifications — NOT
+// by grouping the verifications table (which omits everyone who hasn't started).
+// Campus-scoped by role via applyCampusScope; optional ?campus= (validated there).
+function emptyBuckets() {
+    return {
+        approved_for_graduation: 0,
+        approved_with_exceptions: 0,
+        pending_approval: 0,
+        pending_approval_with_exception: 0,
+        pending_approval_without_exception: 0,
+        pending_recommendation: 0,
+        not_recommended_declined: 0,
+        other: 0,
+        total: 0,
+    }
+}
+// Map the SQL bucket token onto the response counters (keeps buckets mutually exclusive).
+function addBucket(acc, bucket, n) {
+    acc.total += n
+    switch (bucket) {
+        case 'approved': acc.approved_for_graduation += n; break
+        case 'approved_exceptions': acc.approved_with_exceptions += n; break
+        case 'pending_approval_exception':
+            acc.pending_approval += n; acc.pending_approval_with_exception += n; break
+        case 'pending_approval':
+            acc.pending_approval += n; acc.pending_approval_without_exception += n; break
+        case 'pending_recommendation': acc.pending_recommendation += n; break
+        case 'not_recommended': acc.not_recommended_declined += n; break
+        default: acc.other += n
+    }
+}
+
 router.get('/summary', requireAuth, requireGraduationApprover, applyCampusScope, async (req, res) => {
     try {
         const params = []
-        let where = ''
-        if (req.scopedCelebrationPoint) { where = 'WHERE gv.celebration_point = ?'; params.push(req.scopedCelebrationPoint) }
+        let campusFilter = ''
+        if (req.scopedCelebrationPoint) { campusFilter = 'AND fg.celebration_point = ?'; params.push(req.scopedCelebrationPoint) }
 
-        const byStatus = await dbAll(
-            `SELECT status, COUNT(*) AS n FROM graduation_verifications gv ${where} GROUP BY status`,
+        // One pass: bucket every active roster member (priority order in the CASE
+        // keeps buckets mutually exclusive), grouped by campus.
+        const rows = await dbAll(
+            `SELECT campus, bucket, COUNT(*) AS n FROM (
+               SELECT fg.celebration_point AS campus,
+                 CASE
+                   WHEN gv.id IS NULL THEN 'pending_recommendation'
+                   WHEN gv.status = 'rejected' OR gv.recommendation = 'not_recommended' THEN 'not_recommended'
+                   WHEN gv.status = 'approved' AND gv.recommendation = 'exception' THEN 'approved_exceptions'
+                   WHEN gv.status = 'approved' THEN 'approved'
+                   WHEN gv.status = 'submitted' AND gv.recommendation = 'exception' THEN 'pending_approval_exception'
+                   WHEN gv.status = 'submitted' THEN 'pending_approval'
+                   ELSE 'other'
+                 END AS bucket
+               FROM group_members gm
+               JOIN formation_groups fg ON fg.id = gm.formation_group_id
+               LEFT JOIN graduation_verifications gv
+                 ON gv.student_thinkific_id = gm.student_thinkific_id
+                AND gv.formation_group_id = gm.formation_group_id
+                AND gv.cohort = COALESCE(fg.cohort, '2026')
+               WHERE gm.active = 1 ${campusFilter}
+             ) t GROUP BY campus, bucket`,
             params
         )
+
+        const totals = emptyBuckets()
+        const perCampus = new Map()
+        for (const r of rows) {
+            const n = parseInt(r.n, 10) || 0
+            addBucket(totals, r.bucket, n)
+            const key = r.campus || 'Unknown'
+            if (!perCampus.has(key)) perCampus.set(key, emptyBuckets())
+            addBucket(perCampus.get(key), r.bucket, n)
+        }
+
+        const total_roster = totals.total
+        const verified = total_roster - totals.pending_recommendation // has a verification row
+        const verified_pct = total_roster > 0 ? Math.round((verified / total_roster) * 100) : 0
+
+        const sum_of_all_buckets =
+            totals.approved_for_graduation + totals.approved_with_exceptions +
+            totals.pending_approval + totals.pending_recommendation +
+            totals.not_recommended_declined + totals.other
+        const reconciliation = { sum_of_all_buckets, total_roster, balances: sum_of_all_buckets === total_roster }
+
+        const by_campus = [...perCampus.entries()]
+            .map(([celebration_point, b]) => ({ celebration_point, ...b }))
+            .sort((a, b) => a.celebration_point.localeCompare(b.celebration_point))
+
+        // Legacy keys (kept additively; no known consumers) — from the verifications table.
+        const legacyWhere = req.scopedCelebrationPoint ? 'WHERE gv.celebration_point = ?' : ''
+        const legacyParams = req.scopedCelebrationPoint ? [req.scopedCelebrationPoint] : []
+        const byStatus = await dbAll(`SELECT status, COUNT(*) AS n FROM graduation_verifications gv ${legacyWhere} GROUP BY status`, legacyParams)
         const byCampus = await dbAll(
-            `SELECT celebration_point, status, COUNT(*) AS n
-             FROM graduation_verifications gv ${where}
-             GROUP BY celebration_point, status ORDER BY celebration_point`,
-            params
+            `SELECT celebration_point, status, COUNT(*) AS n FROM graduation_verifications gv ${legacyWhere}
+             GROUP BY celebration_point, status ORDER BY celebration_point`, legacyParams
         )
-        res.json({ success: true, byStatus, byCampus })
+
+        res.json({
+            success: true,
+            scope: req.scopedCelebrationPoint || 'all',
+            total_roster,
+            verified,
+            verified_pct,
+            buckets: {
+                approved_for_graduation: totals.approved_for_graduation,
+                approved_with_exceptions: totals.approved_with_exceptions,
+                pending_approval: {
+                    total: totals.pending_approval,
+                    with_exception: totals.pending_approval_with_exception,
+                    without_exception: totals.pending_approval_without_exception,
+                },
+                pending_recommendation: totals.pending_recommendation,
+                not_recommended_declined: totals.not_recommended_declined,
+                other: totals.other,
+            },
+            by_campus,
+            reconciliation,
+            byStatus, byCampus, // legacy
+        })
     } catch (e) {
         console.error('[graduation] /summary error:', e.message)
         res.status(500).json({ success: false, message: e.message })

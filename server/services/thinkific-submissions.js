@@ -193,3 +193,38 @@ export async function probeSubmissions() {
         return out
     }
 }
+
+/**
+ * Read-only: page every configured assignment lesson and return the LIVE
+ * Thinkific status per submission id. Used by the status-mirror diagnostic to
+ * compare against the stored thinkific_status. No writes; never returns a token.
+ * @returns {Promise<Map<string, {status, reviewedAt, userName, email, lessonName, userId}>>}
+ */
+export async function fetchLiveSubmissions() {
+    const lessonIds = await getAssignmentLessonIds()
+    const map = new Map()
+    for (const lessonId of lessonIds) {
+        let after = null, hasNext = true, lessonName = null, page = 0
+        while (hasNext) {
+            const data = await thinkificGraphQL(SUBMISSIONS_QUERY, { id: lessonId, after }, { label: 'submissions-status-check' })
+            const content = data?.lesson?.content
+            lessonName = data?.lesson?.title || lessonName
+            if (!content || content.__typename !== 'AssignmentContent') break
+            const conn = content.submissions
+            for (const n of (conn?.nodes || [])) {
+                map.set(String(n.id), {
+                    status: n.status || null,
+                    reviewedAt: n.reviewedAt || null,
+                    userName: `${n.user?.firstName || ''} ${n.user?.lastName || ''}`.trim() || null,
+                    email: n.user?.email || null,
+                    userId: numericUserId(n.user),
+                    lessonName,
+                })
+            }
+            hasNext = !!conn?.pageInfo?.hasNextPage
+            after = conn?.pageInfo?.endCursor || null
+            if (++page > 200) break
+        }
+    }
+    return map
+}

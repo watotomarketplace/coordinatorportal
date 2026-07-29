@@ -239,6 +239,266 @@ router.post('/rebuild-aliases', requireAdmin, async (req, res) => {
     }
 })
 
+/**
+ * GET /api/diagnostics/attendance-trace?groupId=  (Admin only, READ-ONLY)
+ *
+ * The graduation roster counted DISTINCT group_sessions.week_number, while the
+ * Attendance/Formation-Groups pages count sessions attended. Where week_number
+ * is duplicated (many sessions labelled Wk 1), DISTINCT collapses them and
+ * silently discards attendance. This quantifies the gap without changing data.
+ *
+ * Omit groupId for the cross-group scale summary (1c) only.
+ */
+router.get('/attendance-trace', requireAdmin, async (req, res) => {
+    try {
+        const groupId = req.query.groupId ? String(req.query.groupId) : null
+        const out = { dialect: IS_POSTGRES ? 'postgres' : 'sqlite', groupId }
+
+        if (groupId) {
+            // ── 1a. Session inventory ───────────────────────────────────────
+            const sessions = await dbAll(
+                `SELECT id, session_date, week_number, did_not_meet
+                 FROM group_sessions WHERE formation_group_id = ?
+                 ORDER BY session_date`, [groupId]
+            )
+            const counted = sessions.filter(s => !s.did_not_meet)
+            const weekHist = {}
+            for (const s of counted) {
+                const k = String(s.week_number ?? 'null')
+                weekHist[k] = (weekHist[k] || 0) + 1
+            }
+            out.session_inventory = {
+                sessions,
+                total_sessions: sessions.length,
+                sessions_counted: counted.length,
+                distinct_week_numbers: new Set(counted.map(s => String(s.week_number ?? 'null'))).size,
+                week_number_histogram: weekHist,
+                collapse_detected: new Set(counted.map(s => String(s.week_number ?? 'null'))).size < counted.length,
+            }
+
+            // ── 1b. Per-participant: sessions vs distinct-weeks ─────────────
+            out.participants = await dbAll(
+                `SELECT gm.student_thinkific_id, gm.student_name,
+                        COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.id END)          AS sessions_attended,
+                        COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.week_number END) AS distinct_weeks_attended
+                 FROM group_members gm
+                 LEFT JOIN session_attendance sa ON sa.group_member_id = gm.id
+                 LEFT JOIN group_sessions gs ON gs.id = sa.session_id
+                 WHERE gm.formation_group_id = ? AND gm.active = 1
+                 GROUP BY gm.student_thinkific_id, gm.student_name
+                 ORDER BY sessions_attended DESC`, [groupId]
+            ).then(rows => rows.map(r => ({
+                ...r,
+                sessions_attended: parseInt(r.sessions_attended || 0, 10),
+                distinct_weeks_attended: parseInt(r.distinct_weeks_attended || 0, 10),
+                undercount: parseInt(r.sessions_attended || 0, 10) - parseInt(r.distinct_weeks_attended || 0, 10),
+            })))
+        }
+
+        // ── 1c. Scale across ALL groups ─────────────────────────────────────
+        const scale = {}
+        try {
+            const perGroup = await dbAll(
+                `SELECT fg.id, fg.group_code,
+                        COUNT(gs.id) AS sessions,
+                        COUNT(DISTINCT gs.week_number) AS distinct_weeks
+                 FROM formation_groups fg
+                 JOIN group_sessions gs ON gs.formation_group_id = fg.id AND gs.did_not_meet = 0
+                 GROUP BY fg.id, fg.group_code`
+            )
+            const affected = perGroup.filter(g => parseInt(g.distinct_weeks, 10) < parseInt(g.sessions, 10))
+            scale.groups_with_sessions = perGroup.length
+            scale.groups_with_collapse = affected.length
+            scale.affected_groups_sample = affected.slice(0, 15).map(g => ({
+                group_code: g.group_code, sessions: parseInt(g.sessions, 10), distinct_weeks: parseInt(g.distinct_weeks, 10),
+            }))
+
+            const impact = await dbAll(
+                `SELECT COUNT(*) AS participants, SUM(diff) AS total_undercount FROM (
+                   SELECT gm.id,
+                     COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.id END)
+                   - COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.week_number END) AS diff
+                   FROM group_members gm
+                   LEFT JOIN session_attendance sa ON sa.group_member_id = gm.id
+                   LEFT JOIN group_sessions gs ON gs.id = sa.session_id
+                   WHERE gm.active = 1
+                   GROUP BY gm.id
+                 ) t WHERE diff > 0`
+            )
+            scale.participants_undercounted = parseInt(impact[0]?.participants || 0, 10)
+            scale.total_sessions_discarded = parseInt(impact[0]?.total_undercount || 0, 10)
+
+            // Threshold crossings: who moves from <13 to >=13 under session counting
+            // MIN(a,b) is SQLite's scalar form; Postgres spells it LEAST(a,b).
+            const CAP = (expr, n) => IS_POSTGRES ? `LEAST(${expr}, ${n})` : `MIN(${expr}, ${n})`
+            const crossings = await dbAll(
+                `SELECT COUNT(*) AS n FROM (
+                   SELECT gm.id,
+                     COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.id END) AS sess,
+                     COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.week_number END) AS wks
+                   FROM group_members gm
+                   LEFT JOIN session_attendance sa ON sa.group_member_id = gm.id
+                   LEFT JOIN group_sessions gs ON gs.id = sa.session_id
+                   WHERE gm.active = 1
+                   GROUP BY gm.id
+                 ) t WHERE t.wks < 13 AND ${CAP('t.sess', 16)} >= 13`
+            )
+            scale.participants_crossing_threshold = parseInt(crossings[0]?.n || 0, 10)
+        } catch (e) { scale.error = e.message }
+        out.scale = scale
+
+        // ── Phase 4. Snapshot exposure (REPORT ONLY — changes nothing) ──────
+        // graduation_verifications froze attended_weeks at submission time, using
+        // the old collapsed week-number count. Quantify; do not modify.
+        const snapshot_exposure = { note: 'REPORT ONLY — no graduation_verifications rows modified. Correction is Ivan/Joshua\'s decision.' }
+        try {
+            const CAPX = IS_POSTGRES ? 'LEAST' : 'MIN'
+            const rows = await dbAll(
+                `SELECT gv.id, gv.student_name, gv.student_thinkific_id, gv.formation_group_id,
+                        gv.attended_weeks AS stored_attended_weeks,
+                        gv.attendance_met AS stored_attendance_met,
+                        gv.recommendation, gv.status,
+                        ${CAPX}(COALESCE(sess.n, 0), 16) AS corrected_attended_weeks
+                 FROM graduation_verifications gv
+                 LEFT JOIN (
+                     SELECT gm.formation_group_id AS gid,
+                            TRIM(CAST(gm.student_thinkific_id AS TEXT)) AS sid,
+                            COUNT(DISTINCT CASE WHEN sa.attended = 1 AND gs.did_not_meet = 0 THEN gs.id END) AS n
+                     FROM group_members gm
+                     LEFT JOIN session_attendance sa ON sa.group_member_id = gm.id
+                     LEFT JOIN group_sessions   gs ON gs.id = sa.session_id
+                     WHERE gm.active = 1
+                     GROUP BY gm.formation_group_id, TRIM(CAST(gm.student_thinkific_id AS TEXT))
+                 ) sess
+                   ON sess.gid = gv.formation_group_id
+                  AND sess.sid = TRIM(CAST(gv.student_thinkific_id AS TEXT))`
+            )
+            const undercounted = rows.filter(r => Number(r.corrected_attended_weeks) > Number(r.stored_attended_weeks ?? 0))
+            const wouldFlip = undercounted.filter(r =>
+                Number(r.corrected_attended_weeks) >= 13 && !Number(r.stored_attendance_met))
+            snapshot_exposure.submitted_rows_total = rows.length
+            snapshot_exposure.rows_stored_lower_than_corrected = undercounted.length
+            snapshot_exposure.rows_that_would_flip_attendance_met = wouldFlip.length
+            snapshot_exposure.sample = undercounted.slice(0, 10).map(r => ({
+                verification_id: r.id,
+                student_name: r.student_name,
+                stored_attended_weeks: r.stored_attended_weeks,
+                corrected_attended_weeks: Number(r.corrected_attended_weeks),
+                recommendation: r.recommendation,
+                status: r.status,
+            }))
+        } catch (e) { snapshot_exposure.error = e.message }
+        out.snapshot_exposure = snapshot_exposure
+
+        // ── week_number data-quality (REPORT ONLY — no repair) ──────────────
+        const week_number_quality = { note: 'REPORT ONLY — week_number is NOT modified by this endpoint.' }
+        try {
+            const dup = await dbAll(
+                `SELECT formation_group_id, week_number, COUNT(*) AS n
+                 FROM group_sessions WHERE did_not_meet = 0
+                 GROUP BY formation_group_id, week_number HAVING COUNT(*) > 1`
+            )
+            week_number_quality.duplicate_week_labels = dup.length
+            week_number_quality.sample = dup.slice(0, 10)
+            const nulls = await dbGet('SELECT COUNT(*) AS n FROM group_sessions WHERE week_number IS NULL')
+            const oob = await dbGet('SELECT COUNT(*) AS n FROM group_sessions WHERE week_number < 1 OR week_number > 16')
+            week_number_quality.null_week_number = parseInt(nulls?.n || 0, 10)
+            week_number_quality.out_of_range_week_number = parseInt(oob?.n || 0, 10)
+        } catch (e) { week_number_quality.error = e.message }
+        out.week_number_quality = week_number_quality
+
+        res.json({ success: true, ...out })
+    } catch (e) {
+        console.error('[diagnostics] attendance-trace error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
+/**
+ * GET /api/diagnostics/submission-status-check  (Admin only, READ-ONLY)
+ *
+ * Compares each thinkific_submissions row's stored thinkific_status against the
+ * LIVE Thinkific status (fetched via the GraphQL API), and flags mismatches.
+ * Diagnoses the Ashley-Businge report: a submission approved on Thinkific shows
+ * REJECTED in the portal. Never writes; never returns a token (auth mode only).
+ *
+ * ?ids=a,b   specific thinkific_submission_id values
+ * ?name=x    filter stored rows by student_name (default: Ashley Businge)
+ * (no args)  scans ALL stored rows against live — the full mismatch count.
+ */
+router.get('/submission-status-check', requireAdmin, async (req, res) => {
+    try {
+        const { fetchLiveSubmissions } = await import('../services/thinkific-submissions.js')
+        const authMode = await getThinkificAuthMode()
+
+        // Which stored rows to examine.
+        let stored
+        if (req.query.ids) {
+            const ids = String(req.query.ids).split(',').map(s => s.trim()).filter(Boolean)
+            const ph = ids.map(() => '?').join(',')
+            stored = await dbAll(
+                `SELECT id, thinkific_submission_id, student_name, thinkific_user_id, thinkific_status, portal_review_status, synced_at
+                 FROM thinkific_submissions WHERE thinkific_submission_id IN (${ph})`, ids)
+        } else {
+            const name = req.query.name != null ? String(req.query.name) : 'Ashley Businge'
+            stored = await dbAll(
+                `SELECT id, thinkific_submission_id, student_name, thinkific_user_id, thinkific_status, portal_review_status, synced_at
+                 FROM thinkific_submissions WHERE student_name LIKE ?`, [`%${name}%`])
+        }
+
+        // Live status for every submission id (one paged read of the assignment).
+        const live = await fetchLiveSubmissions()
+
+        let mismatches = 0
+        const rows = stored.map(r => {
+            const l = live.get(String(r.thinkific_submission_id))
+            const mismatch = !!l && String(l.status) !== String(r.thinkific_status)
+            if (mismatch) mismatches++
+            return {
+                submission_id: r.thinkific_submission_id,
+                student_name: r.student_name,
+                stored_thinkific_status: r.thinkific_status,
+                live_thinkific_status: l ? l.status : '(not found in live list)',
+                live_reviewed_at: l?.reviewedAt || null,
+                portal_review_status: r.portal_review_status,
+                synced_at: r.synced_at,
+                mismatch,
+                live_missing: !l,
+            }
+        })
+
+        // Full-population mismatch count (independent of the row filter above).
+        let total_stored = 0, total_mismatched = 0, total_live_missing = 0
+        try {
+            const all = await dbAll('SELECT thinkific_submission_id, thinkific_status FROM thinkific_submissions')
+            total_stored = all.length
+            for (const r of all) {
+                const l = live.get(String(r.thinkific_submission_id))
+                if (!l) { total_live_missing++; continue }
+                if (String(l.status) !== String(r.thinkific_status)) total_mismatched++
+            }
+        } catch (e) { /* reported via error field below if it throws */ }
+
+        res.json({
+            success: true,
+            auth_mode: authMode,                       // mode only — never the token
+            live_submission_count: live.size,
+            examined: rows.length,
+            mismatches_in_examined: mismatches,
+            rows,
+            population: {
+                total_stored,
+                total_mismatched,                      // rows whose stored status ≠ live
+                total_live_missing,                    // stored rows with no matching live submission (stale ids)
+                note: 'total_mismatched>1 suggests a mapping/sync bug; ~0 with a stale row suggests a one-off resubmission.',
+            },
+        })
+    } catch (e) {
+        console.error('[diagnostics] submission-status-check error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
 router.get('/resolve-trace', requireAdmin, async (req, res) => {
     try {
         const ids = (req.query.ids ? String(req.query.ids).split(',') : DEFAULT_TRACE_IDS)

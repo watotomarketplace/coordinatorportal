@@ -522,6 +522,10 @@ router.get('/submission-sync-check', requireAdmin, async (req, res) => {
         const userId = req.query.userId ? String(req.query.userId).trim() : null
         const name = req.query.name != null ? String(req.query.name).trim() : null
 
+        // TODO(WL101): for ?userId=, a User.assignmentSubmissions(courseIds:[...])
+        // query would fetch just that participant's submissions (1 cheap call)
+        // instead of paging the whole assignment — much lighter on the rate-limit
+        // budget. Kept as full-list for now so ?name= and no-arg scans also work.
         const live = await fetchLiveSubmissions() // Map(submissionId -> {status,fileName,fileUrl,submittedAt,userName,userId,...})
 
         // Stored rows keyed by submission id.

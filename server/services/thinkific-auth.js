@@ -71,32 +71,59 @@ export async function thinkificGraphQL(query, variables = {}, { label = 'graphql
         throw e
     }
     await logModeOnce(label)
-    const res = await withRetry(() => axios.post(
-        GRAPHQL_URL,
-        { query, variables },
-        {
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            timeout: 120000,
-            httpsAgent: keepAliveAgent,
-            validateStatus: () => true,
-        }
-    ), label)
 
-    if (res.status === 401 || res.status === 403) {
-        const e = new Error(`Thinkific GraphQL auth rejected (HTTP ${res.status}) — check the API Access Token`)
-        e.code = 'GRAPHQL_AUTH'
-        throw e
+    // Thinkific GraphQL uses a cost-based budget and returns rate-limit errors as
+    // HTTP 200 with an errors[] payload (so network-level withRetry can't see
+    // them). Retry those, waiting for the reset window it reports (bounded).
+    const RL_ATTEMPTS = 5
+    for (let attempt = 1; attempt <= RL_ATTEMPTS; attempt++) {
+        const res = await withRetry(() => axios.post(
+            GRAPHQL_URL,
+            { query, variables },
+            {
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                timeout: 120000,
+                httpsAgent: keepAliveAgent,
+                validateStatus: () => true,
+            }
+        ), label)
+
+        if (res.status === 401 || res.status === 403) {
+            const e = new Error(`Thinkific GraphQL auth rejected (HTTP ${res.status}) — check the API Access Token`)
+            e.code = 'GRAPHQL_AUTH'
+            throw e
+        }
+
+        const errs = res.data?.errors
+        if (errs?.length) {
+            const rateLimited = errs.some(x => x.extensions?.code === 'RATE_LIMITED' || /rate limit/i.test(x.message || ''))
+            if (rateLimited && attempt < RL_ATTEMPTS) {
+                // Prefer the API's reset time only when it's a real future instant;
+                // its value is sometimes a duration-from-epoch (unusable), so fall
+                // back to exponential backoff (5s,10s,20s,40s… capped at 60s).
+                let waitMs = Math.min(60000, 5000 * Math.pow(2, attempt - 1))
+                const parsed = Date.parse(res.data?.extensions?.rateLimit?.resetAt || '')
+                if (Number.isFinite(parsed) && parsed - Date.now() > 0) {
+                    waitMs = Math.min(parsed - Date.now() + 500, 65000)
+                }
+                console.warn(`⏳ [thinkific] ${label} rate-limited (attempt ${attempt}/${RL_ATTEMPTS}) — waiting ${Math.round(waitMs / 1000)}s`)
+                await new Promise(r => setTimeout(r, waitMs))
+                continue
+            }
+            const msg = errs.map(x => x.message).join('; ')
+            const e = new Error(`Thinkific GraphQL error: ${msg}`)
+            e.graphqlErrors = errs
+            throw e
+        }
+        if (!res.data?.data) {
+            throw new Error(`Thinkific GraphQL returned no data (HTTP ${res.status})`)
+        }
+        return res.data.data
     }
-    if (res.data?.errors?.length) {
-        const msg = res.data.errors.map(x => x.message).join('; ')
-        const e = new Error(`Thinkific GraphQL error: ${msg}`)
-        e.graphqlErrors = res.data.errors
-        throw e
-    }
-    if (!res.data?.data) {
-        throw new Error(`Thinkific GraphQL returned no data (HTTP ${res.status})`)
-    }
-    return res.data.data
+    // Exhausted rate-limit retries.
+    const e = new Error('Thinkific GraphQL error: API rate limit exceeded (after retries)')
+    e.code = 'RATE_LIMITED'
+    throw e
 }
 
 /**

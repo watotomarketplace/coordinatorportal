@@ -153,6 +153,7 @@ export async function syncSubmissions() {
                 after = conn?.pageInfo?.endCursor || null
                 if ((++page % 5) === 0 || !hasNext) console.log(`[submissions] lesson ${lessonId}: page ${page}, ${total} processed so far`)
                 if (page > 200) { console.warn('[submissions] 200-page safety stop'); break }
+                if (hasNext) await new Promise(r => setTimeout(r, 250)) // pace the cost budget
             }
             lessonsSeen.push({ lessonId, lessonName })
         }
@@ -227,6 +228,7 @@ export async function fetchLiveSubmissions() {
             hasNext = !!conn?.pageInfo?.hasNextPage
             after = conn?.pageInfo?.endCursor || null
             if (++page > 200) break
+            if (hasNext) await new Promise(r => setTimeout(r, 250)) // pace the cost budget
         }
     }
     return map

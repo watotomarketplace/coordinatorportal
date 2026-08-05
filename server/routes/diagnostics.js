@@ -499,6 +499,101 @@ router.get('/submission-status-check', requireAdmin, async (req, res) => {
     }
 })
 
+/**
+ * GET /api/diagnostics/submission-sync-check  (Admin only, READ-ONLY)
+ *
+ * Diagnoses why re-uploaded / newly-uploaded portfolios aren't surfacing in the
+ * Certificate Submissions queue. Compares LIVE Thinkific submissions against the
+ * stored thinkific_submissions rows and classifies every discrepancy:
+ *   file_changed        — same submission id, but live file_url/name/date differ from stored
+ *   live_missing_stored — a live submission with NO stored row (new id not fetched/inserted)
+ *   stale_stored        — a stored row with no live match (superseded / removed)
+ *   status_changed      — same id, live status ≠ stored
+ *
+ * ?userId=  one participant's Thinkific user id
+ * ?name=    filter by student_name (LIKE)
+ * (no args) scans the whole population and returns the discrepancy sample + counts.
+ * Never writes; never returns a token (auth mode only).
+ */
+router.get('/submission-sync-check', requireAdmin, async (req, res) => {
+    try {
+        const { fetchLiveSubmissions } = await import('../services/thinkific-submissions.js')
+        const authMode = await getThinkificAuthMode()
+        const userId = req.query.userId ? String(req.query.userId).trim() : null
+        const name = req.query.name != null ? String(req.query.name).trim() : null
+
+        const live = await fetchLiveSubmissions() // Map(submissionId -> {status,fileName,fileUrl,submittedAt,userName,userId,...})
+
+        // Stored rows keyed by submission id.
+        const storedRows = await dbAll(
+            `SELECT thinkific_submission_id, student_name, thinkific_user_id, file_name, file_url,
+                    submitted_at, thinkific_status, portal_review_status, reviewed_by_user_id, reviewed_at
+             FROM thinkific_submissions`
+        )
+        const storedById = new Map(storedRows.map(r => [String(r.thinkific_submission_id), r]))
+
+        const matchesFilter = (l) => {
+            if (userId) return String(l.userId) === userId
+            if (name) return (l.userName || '').toLowerCase().includes(name.toLowerCase())
+            return true
+        }
+        const norm = (v) => (v == null ? '' : String(v)).trim()
+
+        const discrepancies = []
+        const counts = { file_changed: 0, live_missing_stored: 0, status_changed: 0, stale_stored: 0 }
+
+        // Live → stored comparison
+        for (const [sid, l] of live) {
+            if (!matchesFilter(l)) continue
+            const stored = storedById.get(String(sid))
+            if (!stored) {
+                counts.live_missing_stored++
+                discrepancies.push({ kind: 'live_missing_stored', submission_id: sid, student_name: l.userName,
+                    live: { file_name: l.fileName, file_url: l.fileUrl, submitted_at: l.submittedAt, status: l.status }, stored: null })
+                continue
+            }
+            const fileChanged = norm(l.fileUrl) !== norm(stored.file_url) || norm(l.fileName) !== norm(stored.file_name) || norm(l.submittedAt) !== norm(stored.submitted_at)
+            const statusChanged = norm(l.status) !== norm(stored.thinkific_status)
+            if (fileChanged || statusChanged) {
+                if (fileChanged) counts.file_changed++
+                if (statusChanged) counts.status_changed++
+                discrepancies.push({
+                    kind: fileChanged ? 'file_changed' : 'status_changed',
+                    submission_id: sid, student_name: l.userName,
+                    already_reviewed: stored.portal_review_status && stored.portal_review_status !== 'unreviewed' ? stored.portal_review_status : null,
+                    live: { file_name: l.fileName, file_url: (l.fileUrl || '').slice(0, 80), submitted_at: l.submittedAt, status: l.status },
+                    stored: { file_name: stored.file_name, file_url: (stored.file_url || '').slice(0, 80), submitted_at: stored.submitted_at, status: stored.thinkific_status },
+                })
+            }
+        }
+
+        // Stored → live (stale rows), only within the filtered set
+        for (const r of storedRows) {
+            const l = live.get(String(r.thinkific_submission_id))
+            const inScope = userId ? String(r.thinkific_user_id) === userId : name ? (r.student_name || '').toLowerCase().includes(name.toLowerCase()) : true
+            if (inScope && !l) {
+                counts.stale_stored++
+                if (discrepancies.length < 200) discrepancies.push({ kind: 'stale_stored', submission_id: r.thinkific_submission_id, student_name: r.student_name,
+                    stored: { file_name: r.file_name, submitted_at: r.submitted_at, status: r.thinkific_status, portal_review_status: r.portal_review_status }, live: null })
+            }
+        }
+
+        res.json({
+            success: true,
+            auth_mode: authMode,               // mode only — never the token
+            filter: userId ? { userId } : name ? { name } : 'all',
+            live_submission_count: live.size,
+            stored_submission_count: storedRows.length,
+            counts,
+            interpretation: 'file_changed>0 → re-uploads not reflected (C1 update gap or same-id file swap). live_missing_stored>0 → new submission ids not inserted (C2/C3). stale_stored with a matching newer row → C4.',
+            sample: discrepancies.slice(0, req.query.userId || req.query.name ? 100 : 25),
+        })
+    } catch (e) {
+        console.error('[diagnostics] submission-sync-check error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
 router.get('/resolve-trace', requireAdmin, async (req, res) => {
     try {
         const ids = (req.query.ids ? String(req.query.ids).split(',') : DEFAULT_TRACE_IDS)

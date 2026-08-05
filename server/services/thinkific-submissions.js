@@ -219,6 +219,9 @@ export async function fetchLiveSubmissions() {
                     email: n.user?.email || null,
                     userId: numericUserId(n.user),
                     lessonName,
+                    fileName: n.file?.name || null,
+                    fileUrl: n.file?.url || null,
+                    submittedAt: n.createdAt || null,
                 })
             }
             hasNext = !!conn?.pageInfo?.hasNextPage

@@ -24,8 +24,8 @@ if (process.env.REDIS_URL || process.env.REDIS_HOST) {
 
             case 'submissions-sync':
                 console.log(`[Worker] Executing submissions-sync...`)
-                const { syncSubmissions } = await import('../services/thinkific-submissions.js')
-                await syncSubmissions()
+                const { startSubmissionsSync } = await import('../services/thinkific-submissions.js')
+                startSubmissionsSync('bullmq') // shared guard; runs to completion in background
                 return true
 
             case 'async-export':

@@ -12,7 +12,7 @@ import {
     requireAuth, applyCampusScope, requireGraduationApprover,
     requireSubmissionReviewer, userHasAnyRole
 } from '../middleware/rbac.js'
-import { syncSubmissions, probeSubmissions } from '../services/thinkific-submissions.js'
+import { syncSubmissions, probeSubmissions, startSubmissionsSync, getSubmissionsSyncState } from '../services/thinkific-submissions.js'
 import { approveSubmission, rejectSubmission } from '../services/thinkific-writeback.js'
 import { getAccessToken } from '../services/thinkific-auth.js'
 
@@ -23,10 +23,25 @@ function canSeeSubmission(user, sub) {
     return sub.celebration_point && sub.celebration_point === user.celebration_point
 }
 
-// ─── POST /sync — Admin/Coordinator pull latest submissions from Thinkific ──
+// ─── POST /sync — kick off a server-side sync that runs to completion ───────
+// Returns immediately; the sync continues in the background even if the client
+// disconnects (a full pull of 1,400+ submissions with rate-limit backoff can
+// take minutes — an in-request sync would be truncated by a browser/proxy
+// timeout, leaving a partial pull). Poll GET /sync/status for progress/result.
 router.post('/sync', requireAuth, requireSubmissionReviewer, async (req, res) => {
-    const result = await syncSubmissions()
-    res.status(result.success ? 200 : 502).json(result)
+    const r = startSubmissionsSync('manual')
+    res.status(202).json({
+        success: true,
+        started: r.started,
+        already_running: !!r.alreadyRunning,
+        started_at: r.startedAt,
+        message: r.started ? 'Sync started — poll /api/graduation/submissions/sync/status' : 'A sync is already running',
+    })
+})
+
+// ─── GET /sync/status — read background sync progress/result ─────────────────
+router.get('/sync/status', requireAuth, requireGraduationApprover, async (req, res) => {
+    res.json({ success: true, ...getSubmissionsSyncState() })
 })
 
 // ─── POST /spike — Admin-only in-app discovery (Render-friendly, read-only) ──

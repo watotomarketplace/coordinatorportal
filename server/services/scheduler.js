@@ -4,7 +4,7 @@ import { dbAll, dbRun, dbGet } from '../db/init.js'
 import { generateAllCheckpoints } from './checkpoints.js'
 import { notifyOverdueReports, notifyCheckpointReady } from './notifications.js'
 import { getCacheStatus, forceRefresh } from './thinkific.js'
-import { syncSubmissions } from './thinkific-submissions.js'
+import { startSubmissionsSync } from './thinkific-submissions.js'
 
 /**
  * Scheduler Service
@@ -96,18 +96,11 @@ export async function initScheduler() {
         // 4. Fallback Thinkific Submissions Sync (Gate 1) — node-cron when no Redis.
         // BullMQ handles this as a repeatable when Redis is present (see queue.js).
         console.log('⏰ Adding fallback node-cron Submissions Sync (every 30 mins)')
-        let subsRunning = false
         const submissionsTask = cron.schedule(CRON_SCHEDULES.SUBMISSIONS_SYNC, () => {
-            if (subsRunning) { console.log('⏰ Cron: submissions sync already running, skipping tick'); return }
-            subsRunning = true
-            setImmediate(async () => {
-                try {
-                    const r = await syncSubmissions()
-                    if (!r.success) console.warn('⚠️ Cron submissions sync error:', r.error)
-                } catch (e) {
-                    console.error('❌ Cron submissions sync failed:', e.message)
-                } finally { subsRunning = false }
-            })
+            // Shares the module-level guard with the manual /sync route so a
+            // scheduled tick never overlaps a running (manual or prior) sync.
+            const r = startSubmissionsSync('cron')
+            if (!r.started) console.log('⏰ Cron: submissions sync already running, skipping tick')
         })
         tasks.push(submissionsTask)
     }

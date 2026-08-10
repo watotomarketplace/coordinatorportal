@@ -33,6 +33,12 @@ export async function getThinkificAuthMode() {
     return (await getAccessToken()) ? 'access-token' : 'legacy-key'
 }
 
+// Observability: count rate-limit waits so diagnostics can report throttling
+// without ever touching the token.
+let _rateLimitWaits = 0
+export function getRateLimitWaitCount() { return _rateLimitWaits }
+export function resetRateLimitWaitCount() { _rateLimitWaits = 0 }
+
 let _loggedMode = null
 async function logModeOnce(context) {
     const mode = await getThinkificAuthMode()
@@ -106,6 +112,7 @@ export async function thinkificGraphQL(query, variables = {}, { label = 'graphql
                 if (Number.isFinite(parsed) && parsed - Date.now() > 0) {
                     waitMs = Math.min(parsed - Date.now() + 500, 65000)
                 }
+                _rateLimitWaits++
                 console.warn(`⏳ [thinkific] ${label} rate-limited (attempt ${attempt}/${RL_ATTEMPTS}) — waiting ${Math.round(waitMs / 1000)}s`)
                 await new Promise(r => setTimeout(r, waitMs))
                 continue

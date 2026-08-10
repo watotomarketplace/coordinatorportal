@@ -165,6 +165,39 @@ export async function syncSubmissions() {
     }
 }
 
+// ─── Server-side sync runner ───────────────────────────────────────────────
+// A full sync pages 1,400+ submissions with rate-limit backoff and can take
+// minutes. Running it inside an HTTP request means a browser/proxy timeout
+// aborts it mid-run and leaves a PARTIAL pull (the original bug). This runs the
+// sync in the background to completion regardless of the client, with a shared
+// guard so manual + scheduled syncs never overlap. Progress is read via
+// getSubmissionsSyncState().
+let _syncState = { running: false, startedAt: null, finishedAt: null, lastResult: null, trigger: null }
+
+export function getSubmissionsSyncState() {
+    return { ..._syncState }
+}
+
+export function startSubmissionsSync(trigger = 'manual') {
+    if (_syncState.running) {
+        return { started: false, alreadyRunning: true, startedAt: _syncState.startedAt }
+    }
+    _syncState = { running: true, startedAt: new Date().toISOString(), finishedAt: null, lastResult: null, trigger }
+    // Detach from the request lifecycle — a client disconnect cannot truncate it.
+    setImmediate(async () => {
+        try {
+            const result = await syncSubmissions()
+            _syncState.lastResult = result
+        } catch (e) {
+            _syncState.lastResult = { success: false, error: e.message }
+        } finally {
+            _syncState.running = false
+            _syncState.finishedAt = new Date().toISOString()
+        }
+    })
+    return { started: true, startedAt: _syncState.startedAt }
+}
+
 // Lightweight read-only probe used by the in-app diagnostic endpoint (the
 // Render-friendly equivalent of the CLI spike). Never mutates. Never returns the token.
 export async function probeSubmissions() {
@@ -219,6 +252,7 @@ export async function fetchLiveSubmissions() {
                     userName: `${n.user?.firstName || ''} ${n.user?.lastName || ''}`.trim() || null,
                     email: n.user?.email || null,
                     userId: numericUserId(n.user),
+                    lessonId: String(lessonId),
                     lessonName,
                     fileName: n.file?.name || null,
                     fileUrl: n.file?.url || null,

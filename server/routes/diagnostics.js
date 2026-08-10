@@ -515,6 +515,93 @@ router.get('/submission-status-check', requireAdmin, async (req, res) => {
  * (no args) scans the whole population and returns the discrepancy sample + counts.
  * Never writes; never returns a token (auth mode only).
  */
+/**
+ * GET /api/diagnostics/submission-completeness  (Admin only, READ-ONLY)
+ *
+ * The trustworthy completeness measure: portal STORED count vs Thinkific's TRUE
+ * total (paged to the very end with retry/pacing — the same path the real sync
+ * uses). Portal-vs-portal counts are misleading: a never-fetched submission is
+ * absent from both sides and would falsely read "complete".
+ *
+ * Reports true total, stored total, the difference, a sample of live submissions
+ * with NO stored row, per-lesson live vs stored counts, an explicit trace for
+ * Edgar Kusasira / kamoga23@yahoo.com, and how many rate-limit waits occurred.
+ * Never writes; never returns a token.
+ */
+router.get('/submission-completeness', requireAdmin, async (req, res) => {
+    try {
+        const { fetchLiveSubmissions } = await import('../services/thinkific-submissions.js')
+        const { getRateLimitWaitCount, resetRateLimitWaitCount } = await import('../services/thinkific-auth.js')
+        const authMode = await getThinkificAuthMode()
+
+        resetRateLimitWaitCount()
+        const live = await fetchLiveSubmissions()           // paged to the end
+        const rate_limit_waits = getRateLimitWaitCount()
+
+        const storedRows = await dbAll('SELECT thinkific_submission_id, student_name, student_email, lesson_id FROM thinkific_submissions')
+        const storedIds = new Set(storedRows.map(r => String(r.thinkific_submission_id)))
+
+        // Live submissions with no stored row (the real gap).
+        const missing = []
+        for (const [sid, l] of live) {
+            if (storedIds.has(String(sid))) continue
+            let resolves = false
+            try { resolves = !!(await resolveStudent(l.userId)) } catch (_) {}
+            if (missing.length < 25) {
+                missing.push({ submission_id: sid, student_name: l.userName, email: l.email, user_id: l.userId, resolves_to_student: resolves })
+            }
+        }
+        const live_total = live.size
+        const stored_total = storedRows.length
+        const difference = live_total - storedIds.size  // live not-yet-stored (by id)
+
+        // Per-lesson live vs stored.
+        const liveByLesson = {}
+        for (const [, l] of live) { const k = l.lessonId || 'unknown'; liveByLesson[k] = (liveByLesson[k] || 0) + 1 }
+        const storedByLesson = {}
+        for (const r of storedRows) { const k = String(r.lesson_id || 'unknown'); storedByLesson[k] = (storedByLesson[k] || 0) + 1 }
+        const per_lesson = [...new Set([...Object.keys(liveByLesson), ...Object.keys(storedByLesson)])]
+            .map(lessonId => ({ lessonId, live: liveByLesson[lessonId] || 0, stored: storedByLesson[lessonId] || 0 }))
+
+        // Explicit Edgar trace (name↔email divergence example).
+        const edgar = { name: 'Edgar Kusasira', email: 'kamoga23@yahoo.com' }
+        const edgarLive = [...live.entries()].filter(([, l]) =>
+            (l.userName || '').toLowerCase().includes('edgar') && (l.userName || '').toLowerCase().includes('kusasira')
+            || (l.email || '').toLowerCase() === edgar.email)
+        const edgarStored = await dbAll(
+            `SELECT thinkific_submission_id, student_name, student_email, thinkific_status, portal_review_status
+             FROM thinkific_submissions WHERE student_name LIKE ? OR student_email = ?`,
+            ['%Edgar%Kusasira%', edgar.email]
+        )
+        let edgarResolves = null
+        if (edgarLive[0]) { try { edgarResolves = !!(await resolveStudent(edgarLive[0][1].userId)) } catch (_) {} }
+        edgar.in_live = edgarLive.length > 0
+        edgar.live = edgarLive.slice(0, 5).map(([id, l]) => ({ submission_id: id, name: l.userName, email: l.email, user_id: l.userId, status: l.status, file: l.fileName }))
+        edgar.in_stored = edgarStored.length > 0
+        edgar.stored = edgarStored
+        edgar.resolves_to_student = edgarResolves
+        edgar.dropped_step = edgar.in_live && !edgar.in_stored
+            ? (edgarResolves ? 'fetched but not inserted (ingest gap)' : 'fetched but unresolved identity — likely dropped at ingest')
+            : (!edgar.in_live ? 'not present in live fetch (not fetched / not submitted)' : 'present in both')
+
+        res.json({
+            success: true,
+            auth_mode: authMode,                 // mode only — never the token
+            live_total,                          // Thinkific's true count (paged to end)
+            stored_total,                        // portal rows
+            missing_from_portal: difference,     // live submission ids with no stored row
+            rate_limit_waits,                    // >0 means throttling occurred (and was retried)
+            per_lesson,
+            missing_sample: missing,
+            edgar,
+            note: 'Proof of completeness = stored_total == live_total (and Edgar in_stored). rate_limit_waits shows throttling was handled, not that data is complete.',
+        })
+    } catch (e) {
+        console.error('[diagnostics] submission-completeness error:', e.message)
+        res.status(500).json({ success: false, message: e.message })
+    }
+})
+
 router.get('/submission-sync-check', requireAdmin, async (req, res) => {
     try {
         const { fetchLiveSubmissions } = await import('../services/thinkific-submissions.js')
